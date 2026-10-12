@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -108,6 +109,30 @@ class LlmClient:
         self._session = session
         self._endpoint = runtime.base_url.rstrip("/") + "/chat/completions"
         self._host = urlparse(self._endpoint).netloc.lower()
+        #: OpenCode 系要求每个请求带一个会话 id，否则直接 400 MissingSessionID。
+        #:
+        #: **必须是 ASCII。** 这里曾经直接用 Sparky 的 session_id，
+        #: 而它含中文 slug —— HTTP 头按 latin-1 编码，一发出就
+        #: ``UnicodeEncodeError: 'latin-1' codec can't encode characters``。
+        #: 改成 session_id 的哈希：同样是"这次会话"的稳定标识，但保证是 ASCII，
+        #: 而且出问题时还能反查回原始 session_id。
+        self._session_header_value = "sparky-" + hashlib.sha256(
+            session.session_id.encode("utf-8")
+        ).hexdigest()[:16]
+
+    def _provider_headers(self) -> dict[str, str]:
+        """服务商专属的**额外请求头**。必须按 ``base_url`` 判定。
+
+        与 ``thinking`` 同一条规则（见 docs/configuration.md §6 已知坑 5）：
+        发错服务商不是被忽略，是会报错。
+
+        OpenCode Zen / Go 缺 ``x-opencode-session`` 会直接
+        ``400 MissingSessionID``（实测 2026-10-12）。这个头不是可选的"优化"，
+        是**能不能连通**的前提。
+        """
+        if "opencode.ai" in self._host:
+            return {"x-opencode-session": self._session_header_value}
+        return {}
 
     def _supports_thinking_switch(self) -> bool:
         """``thinking`` 是 DeepSeek 系专属参数，发给别家会 400。
@@ -320,16 +345,29 @@ class LlmClient:
         return payload
 
     def _request(self, payload: dict[str, Any]) -> urllib.request.Request:
+        headers = {
+            "Content-Type": "application/json",
+            # 必须显式设置：默认的 Python-urllib UA 会被部分网关拒绝
+            "User-Agent": USER_AGENT,
+            "Authorization": f"Bearer {self._runtime.api_key}",
+            "Accept": "application/json",
+            **self._provider_headers(),
+        }
+        # 前置检查而不是兜底：HTTP 头按 latin-1 编码，非 ASCII 会在发出去的
+        # 那一刻抛 UnicodeEncodeError，而那个回溯完全看不出是哪来的头。
+        # 实测踩过一次（session_id 里带中文 slug），所以在这里挡住。
+        for name, value in headers.items():
+            try:
+                value.encode("latin-1")
+            except UnicodeEncodeError as exc:
+                raise LlmError(
+                    f"请求头 {name} 含非 ASCII 字符，HTTP 头无法承载：{value!r}",
+                    hint="头值必须是 ASCII；需要唯一标识就用哈希或 UUID。",
+                ) from exc
         return urllib.request.Request(
             self._endpoint,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                # 必须显式设置：默认的 Python-urllib UA 会被部分网关拒绝
-                "User-Agent": USER_AGENT,
-                "Authorization": f"Bearer {self._runtime.api_key}",
-                "Accept": "application/json",
-            },
+            headers=headers,
             method="POST",
         )
 

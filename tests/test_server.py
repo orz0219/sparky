@@ -168,6 +168,82 @@ class TestStopEndpoint(ServerTestCase):
         self.assertTrue(check())
 
 
+class TestProviderHeaders(unittest.TestCase):
+    """服务商专属请求头必须按 base_url 判定，且必须是 ASCII。"""
+
+    def _client(self, base_url: str):
+        import os
+        import tempfile
+
+        from sparky.config import Config, load_runtime_config
+        from sparky.events import EventBus
+        from sparky.llm import LlmClient
+        from sparky.session import Session
+
+        os.environ["SPARKY_HDR_TEST_KEY"] = "sk-test"
+        self.addCleanup(os.environ.pop, "SPARKY_HDR_TEST_KEY", None)
+        runtime = load_runtime_config(
+            Config(raw_input="测试", api_key_env="SPARKY_HDR_TEST_KEY", base_url=base_url),
+            cwd=Path(tempfile.gettempdir()),
+        )
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        session = Session.create(
+            Path(tmp.name) / "s", "中文输入也要能当会话名", bus=EventBus(), config_snapshot={}
+        )
+        return LlmClient(runtime, session)
+
+    def test_opencode_gets_the_session_header(self):
+        client = self._client("https://opencode.ai/zen/go/v1")
+        self.assertIn("x-opencode-session", client._provider_headers())
+
+    def test_other_providers_get_no_extra_header(self):
+        client = self._client("https://api.deepseek.com/v1")
+        self.assertEqual(client._provider_headers(), {})
+
+    def test_header_value_is_ascii(self):
+        """回归：曾经直接用含中文的 session_id，HTTP 头 latin-1 编码直接崩。
+
+        ``UnicodeEncodeError: 'latin-1' codec can't encode characters`` ——
+        而且回溯里完全看不出是哪个头。
+        """
+        client = self._client("https://opencode.ai/zen/go/v1")
+        value = client._provider_headers()["x-opencode-session"]
+        value.encode("latin-1")  # 不抛就说明是 ASCII
+
+    def test_non_ascii_header_is_rejected_loudly(self):
+        client = self._client("https://opencode.ai/zen/go/v1")
+        client._session_header_value = "含中文的头值"
+        with self.assertRaises(Exception) as ctx:
+            client._request({"model": "m", "messages": []})
+        self.assertIn("非 ASCII", str(ctx.exception))
+
+
+class TestInterjectionQueue(unittest.TestCase):
+    def test_add_then_drain_returns_once(self):
+        q = server_mod.InterjectionQueue()
+        q.add("第一条", received_round=1)
+        q.add("第二条", received_round=1)
+        self.assertEqual([n["text"] for n in q.drain()], ["第一条", "第二条"])
+        self.assertEqual(q.drain(), [], "取过一次就不该再取到")
+        self.assertEqual(q.pending_count, 0)
+
+    def test_all_keeps_everything_ever_added(self):
+        """``all`` 是"收到过的全部"，``drain`` 是"还没送达的" —— 两者职责不同。"""
+        q = server_mod.InterjectionQueue()
+        q.add("甲", received_round=1)
+        q.drain()
+        q.add("乙", received_round=2)
+        self.assertEqual([n["text"] for n in q.all], ["甲", "乙"])
+
+    def test_record_is_shared_not_copied(self):
+        """队列与会话记录必须共享同一个 dict —— 否则 delivered_round 会分叉。"""
+        q = server_mod.InterjectionQueue()
+        record = q.add("共享对象", received_round=1)
+        record["delivered_round"] = 2
+        self.assertEqual(q.all[0]["delivered_round"], 2)
+
+
 class TestPortReuse(unittest.TestCase):
     def test_same_port_can_be_reused_after_stop(self):
         """回归：allow_reuse_address=False 会让服务停掉后端口一分钟内无法重用。
@@ -228,9 +304,21 @@ class TestFrontendConstraints(unittest.TestCase):
                 with self.subTest(file=name, pattern=pattern):
                     self.assertNotIn(pattern, body)
 
+    #: 前端总行数上限。这是一条**可维护性护栏**，不是技术限制 ——
+    #: 它的作用是拦住"再堆一点就该上构建步骤了"的那一刻。
+    #:
+    #: 最初定的是 1000 行，那是在还没有任何 UI 的时候拍的。
+    #: 重做阅读体验时涨到约 1050 行（新增：议程侧栏、可折叠轮次、
+    #: 调研结论区、插话输入框），属于真实增长而非虚胖，因此上调到 1200。
+    #: 上调本身要写理由 —— 不然这个护栏就形同虚设。
+    FRONTEND_LINE_BUDGET = 1200
+
     def test_total_line_budget(self):
         total = sum(len(self._read(n).splitlines()) for n in ("index.html", "app.js", "style.css"))
-        self.assertLessEqual(total, 1000, f"前端共 {total} 行，超过 1000 行的上限")
+        self.assertLessEqual(
+            total, self.FRONTEND_LINE_BUDGET,
+            f"前端共 {total} 行，超过 {self.FRONTEND_LINE_BUDGET} 行的护栏",
+        )
 
     def test_every_known_event_type_has_a_handler(self):
         """后端会发的事件，前端都要有处理分支 —— 否则界面会静默停在某个状态。"""
@@ -285,6 +373,28 @@ class TestDemoFixture(unittest.TestCase):
         for needed in ("panel.ready", "turn.end", "disagreement.open", "round.start"):
             with self.subTest(event=needed):
                 self.assertIn(needed, types)
+
+    def test_turn_payloads_carry_every_field_the_frontend_reads(self):
+        """夹具的 turn payload 必须与后端发的同形。
+
+        实测踩过：夹具只写了 ``say`` 而漏了 ``summary``，
+        前端读 ``t.summary`` 拿到 undefined，**发言正文整段空白** ——
+        页面看起来"结构对了"，但最该读的那部分没了。
+        """
+        needed = {"persona_id", "round", "summary", "abstained", "actions"}
+        for event_type, data in self._events():
+            if event_type != "turn.end":
+                continue
+            turn = data["turn"]
+            with self.subTest(persona=turn.get("persona_id")):
+                missing = needed - set(turn)
+                self.assertFalse(missing, f"turn payload 缺少 {sorted(missing)}")
+
+    def test_demonstrates_interjection(self):
+        """插话是核心交互，夹具必须能演示它。"""
+        types = {event_type for event_type, _ in self._events()}
+        self.assertIn("client.interjection", types)
+        self.assertIn("client.interjection.delivered", types)
 
 
 if __name__ == "__main__":

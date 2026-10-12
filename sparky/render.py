@@ -136,6 +136,16 @@ class TerminalRenderer:
     def _on_doc_ready(self, data: dict[str, Any]) -> None:
         self.done(f"[定稿] 已写出 {data['path']}（{data['chars']} 字）")
 
+    def _on_client_interjection(self, data: dict[str, Any]) -> None:
+        self.blank()
+        self._write(self._paint("◆ 你插话：", "35") + data["text"])
+        self._write("  （将在本轮结束时送达专家）")
+
+    def _on_client_interjection_delivered(self, data: dict[str, Any]) -> None:
+        self._write(
+            f"  → 你的插话已在第 {data['round']} 轮送达：{data['text']}"
+        )
+
     def _on_warning(self, data: dict[str, Any]) -> None:
         self._write(self._paint(f"  ⚠ [{data['code']}] {data['message']}", "33"))
 

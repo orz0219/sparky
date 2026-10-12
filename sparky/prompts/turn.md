@@ -104,6 +104,10 @@ ${stance}
 
 ${brief_json}
 
+## 委托人的插话
+
+${client_notes}
+
 ## 每位参会者的初始立场
 
 ${stances_overview}
@@ -159,6 +163,10 @@ ${your_memo}
 立案书：
 
 ${brief_json}
+
+## 委托人的插话
+
+${client_notes}
 
 ## 你被点名回应以下分歧
 

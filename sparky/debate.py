@@ -109,6 +109,7 @@ def run(
     outcome: ReconOutcome,
     *,
     should_stop: Callable[[], bool] | None = None,
+    interjections: object | None = None,
 ) -> DebateResult:
     """执行 S3 + S4，返回讨论结果。
 
@@ -116,6 +117,10 @@ def run(
     中途打断一轮会让并发中的几位专家看到不同的世界，破坏"轮内只读上轮快照"
     这条不变量（见 docs/consensus.md §2.1）。
     所以停止的语义是"**当前轮跑完就收口**"，不是"立刻掐断"。
+
+    ``interjections`` 是委托人的插话队列（``server.InterjectionQueue``）。
+    它在**每轮开始前**被取空并注入该轮的提示词 —— 与停止同理，
+    中途打断一轮会破坏并发不变量。
     """
     ledger = Ledger()
     result = DebateResult(ledger=ledger)
@@ -136,6 +141,24 @@ def run(
                 hint="这是内部保险，不是产品行为。请检查 consensus.decide 的分支顺序。",
             )
 
+        # 委托人插话：**轮间送达**。
+        #
+        # 归属划分（曾经搞错过一次，见下面的注释）：
+        #   · ``session.interjections`` 是**全部收到过的插话**，由 HTTP 回调
+        #     在收到时就登记 —— 它要覆盖"直到会话结束都没送达"的那些，
+        #     文档附录 C 才能如实列出未送达的插话。
+        #   · 队列的 ``_pending`` 只是**还没送达**的那些。
+        #   · 两边放的是**同一个 dict 对象**，所以这里填 ``delivered_round``
+        #     会同步到会话记录，不需要（也绝不能）再 append 一次。
+        if interjections is not None:
+            for note in interjections.drain():
+                note["delivered_round"] = round_no
+                session.emit(
+                    events.CLIENT_INTERJECTION_DELIVERED,
+                    round=round_no,
+                    text=note["text"],
+                )
+
         if should_stop is not None and should_stop():
             session.warn(
                 "stop_requested",
@@ -143,6 +166,7 @@ def run(
             )
             break
 
+        session.current_round = round_no
         focus_ids: tuple[str, ...] = () if round_no == 1 else (decision.focus if decision else ())
         participants = _pick_participants(
             panel=panel,
@@ -182,6 +206,7 @@ def run(
             focus_ids=focus_ids,
             history=result.rounds,
             round_no=round_no,
+            client_notes=_render_client_notes(session),
         )
         result.rounds.append(turns)
         session.rounds.append(turns)
@@ -301,6 +326,7 @@ def _collect_turns(
     focus_ids: tuple[str, ...],
     history: list[list[Turn]],
     round_no: int,
+    client_notes: str,
 ) -> list[Turn]:
     """N 人并发生成发言，**按人设顺序回收**。
 
@@ -319,18 +345,20 @@ def _collect_turns(
     builders: dict[str, Callable[[Persona], str]] = {}
     for persona in participants:
         if round_no == 1:
-            builders[persona.id] = lambda p, bj=brief_json: build_prompt(
+            builders[persona.id] = lambda p, bj=brief_json, cn=client_notes: build_prompt(
                 "turn",
                 "opening",
                 brief_json=bj,
+                client_notes=cn,
                 stances_overview=_stances_overview(panel, outcome, exclude_id=p.id),
                 your_memo=_own_memo(outcome.memo_for(p.id)),
             )
         else:
-            builders[persona.id] = lambda p, bj=brief_json, fids=focus_ids: build_prompt(
+            builders[persona.id] = lambda p, bj=brief_json, fids=focus_ids, cn=client_notes: build_prompt(
                 "turn",
                 "focus",
                 brief_json=bj,
+                client_notes=cn,
                 focus_items=_focus_items(ledger, panel, fids, persona_id=p.id),
                 your_concession=_concession_of(outcome.memo_for(p.id)),
             )
@@ -482,6 +510,26 @@ def _own_memo(memo: StanceMemo | None) -> str:
             f"让步条件：{memo.would_concede_if}",
         ]
     )
+
+
+def _render_client_notes(session: Session) -> str:
+    """把委托人的插话渲染成提示词里的一段。
+
+    措辞上做了两件事：① 明说它**优先于专家各自的偏好**（委托人是要东西的人）；
+    ② 但要求专家**冲突时说出来，不要默默接受** —— 否则插话会变成
+    "所有人立刻改口"，那比不插话更糟。
+    """
+    if not session.interjections:
+        return "（委托人在本次讨论中还没有插话。）"
+    lines = [
+        "委托人在讨论进行中补充了以下意见。**它们优先于你们各自的偏好** ——",
+        "但如果你认为它有问题，**明确说出来**，不要默默接受：",
+        "",
+    ]
+    for item in session.interjections:
+        round_no = item.get("delivered_round") or item.get("received_round")
+        lines.append(f"- （第 {round_no} 轮）「{item['text']}」")
+    return "\n".join(lines)
 
 
 def _concession_of(memo: StanceMemo | None) -> str:

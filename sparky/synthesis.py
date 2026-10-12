@@ -560,6 +560,15 @@ def _render_appendices(
         lines.append("")
 
     lines += ["## 附录 C：讨论轮次摘要", ""]
+    if session.interjections:
+        # 委托人插话必须可追溯：它是讨论的输入之一，
+        # 而且往往会改变结论 —— 事后必须能查到"当时是谁让改的"。
+        lines += ["### 委托人的插话", ""]
+        for item in session.interjections:
+            delivered = item.get("delivered_round")
+            where = f"第 {delivered} 轮送达" if delivered else "未送达（讨论已结束）"
+            lines.append(f"- （{where}）{item['text']}")
+        lines.append("")
     if not session.rounds:
         lines.append(
             "本次会话**未运行讨论阶段**。因此本文档中的全部结论来自各专家的"

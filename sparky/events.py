@@ -63,6 +63,12 @@ CONVERGENCE_DECISION = "convergence.decision"
 SYNTHESIS_START = "synthesis.start"
 DOC_READY = "doc.ready"
 
+#: 委托人（用户）在讨论进行中插话。**收到即发**，界面立刻可见。
+CLIENT_INTERJECTION = "client.interjection"
+#: 插话被送进某一轮的提示词。插话**在轮与轮之间送达** ——
+#: 见 docs/web-ui.md「为什么不是立即打断」。
+CLIENT_INTERJECTION_DELIVERED = "client.interjection.delivered"
+
 WARNING = "warning"
 ERROR = "error"
 
@@ -75,6 +81,7 @@ KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
     DISAGREEMENT_OPEN, DISAGREEMENT_UPDATE, DISAGREEMENT_CLOSE,
     CONVERGENCE_DECISION,
     SYNTHESIS_START, DOC_READY,
+    CLIENT_INTERJECTION, CLIENT_INTERJECTION_DELIVERED,
     WARNING, ERROR,
 })
 

@@ -75,12 +75,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         bus.subscribe(renderer)
 
         # 网页是事件总线的**另一个订阅者** —— 编排层完全不知道它在不在。
-        # 先于会话启动，这样页面能立刻连上，不会错过任何一条事件。
         hub = server_stage.EventHub()
         bus.subscribe(hub.publish)
+
+        # 会话先建、网页后起：这样端口冲突时能**如实把会话标记为失败**，
+        # 而不是留下一个状态永远停在 running 的空目录。
+        session = Session.create(
+            runtime.out_root,
+            runtime.raw_input,
+            bus=bus,
+            config_snapshot=_config_snapshot(runtime, config),
+        )
+
+        interjections = server_stage.InterjectionQueue()
+
+        def accept_interjection(text: str) -> bool:
+            """委托人插话：收到即记、即广播；**送达要等本轮结束**。
+
+            返回 False 表示当前不接受（会话已结束），HTTP 层会回 409 ——
+            不静默丢弃用户写的东西。
+            """
+            if session is None or session.doc_path is not None:
+                return False
+            # 队列与会话记录共享**同一个 dict 对象** —— debate 填
+            # delivered_round 时两处同步更新，不会分叉成两份真相。
+            record = interjections.add(text, received_round=session.current_round)
+            session.interjections.append(record)
+            session.emit(
+                events.CLIENT_INTERJECTION,
+                text=text,
+                received_round=session.current_round,
+            )
+            return True
+
         if runtime.web:
             http_server, _thread = server_stage.start(
-                hub, host="127.0.0.1", port=runtime.port
+                hub,
+                host="127.0.0.1",
+                port=runtime.port,
+                on_interject=accept_interjection,
             )
             url = f"http://127.0.0.1:{runtime.port}"
             renderer.note(f"本地网页：{url}")
@@ -90,13 +123,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 renderer.fail(f"⚠ 没能自动打开浏览器，请手动访问 {url}")
         else:
             renderer.note("（--no-web：只在终端输出）")
-
-        session = Session.create(
-            runtime.out_root,
-            runtime.raw_input,
-            bus=bus,
-            config_snapshot=_config_snapshot(runtime, config),
-        )
         session.emit(
             events.SESSION_START,
             session_id=session.session_id,
@@ -138,6 +164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             panel,
             outcome,
             should_stop=server_stage.make_stop_check(http_server),
+            interjections=interjections if runtime.web else None,
         )
 
         # 「零分歧」是失败信号而不是顺利信号，必须显式暴露 ——

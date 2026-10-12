@@ -63,6 +63,46 @@ _CONTENT_TYPES = {
 }
 
 
+class InterjectionQueue:
+    """委托人的插话队列。
+
+    **收到即记，轮间送达。** 用户随时可以打字，但插话只在**轮与轮之间**
+    被送进提示词 —— 中途打断一轮会让并发中的几位专家看到不同的世界，
+    破坏"轮内只读上轮快照"这条不变量（见 docs/consensus.md §2.1）。
+    所以停止与插话的语义都是"**当前轮跑完再生效**"，不是"立刻掐断"。
+
+    线程安全：HTTP 处理线程写、讨论线程读。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: list[dict] = []
+        self._all: list[dict] = []
+
+    def add(self, text: str, *, received_round: int) -> dict:
+        record = {"text": text, "received_round": received_round, "delivered_round": None}
+        with self._lock:
+            self._pending.append(record)
+            self._all.append(record)
+        return record
+
+    def drain(self) -> list[dict]:
+        """取出待送达的插话并清空待送队列。"""
+        with self._lock:
+            drained, self._pending = self._pending, []
+        return drained
+
+    @property
+    def all(self) -> list[dict]:
+        with self._lock:
+            return list(self._all)
+
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+
 class EventHub:
     """线程安全的扇出：每个 SSE 客户端一个队列，并保留一份历史快照。
 
@@ -136,11 +176,41 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        if path != "/stop":
-            self._send_text(404, "没有这个地址。可用：POST /stop")
+        if path == "/stop":
+            self.server.request_stop()  # type: ignore[attr-defined]
+            self._send_json(200, {"ok": True, "message": "已请求停止：当前轮结束后进入定稿"})
             return
-        self.server.request_stop()  # type: ignore[attr-defined]
-        self._send_json(200, {"ok": True, "message": "已请求停止：当前轮结束后进入定稿"})
+        if path == "/interject":
+            self._handle_interject()
+            return
+        self._send_text(404, "没有这个地址。可用：POST /stop · POST /interject")
+
+    def _handle_interject(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            self._send_text(400, "请求体是空的。")
+            return
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            # 不猜、不修补：请求体不是合法 JSON 就如实报错
+            self._send_text(400, f"请求体不是合法 JSON：{exc}")
+            return
+        text = str(payload.get("text", "")).strip()
+        if not text:
+            self._send_text(400, "插话内容不能为空。")
+            return
+        accept = self.server.on_interject  # type: ignore[attr-defined]
+        if accept is None:
+            self._send_text(503, "这个会话不接受插话。")
+            return
+        if not accept(text):
+            self._send_text(409, "会话还没开始或已经结束，插话没有送达。")
+            return
+        self._send_json(
+            200,
+            {"ok": True, "message": "已收到：会在本轮结束时送达专家"},
+        )
 
     # ── 静态资源 ──
 
@@ -234,8 +304,15 @@ class SparkyServer(ThreadingHTTPServer):
     #: 而"另一个进程正在监听时必须报错"这条性质，开着它也照样成立。
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], hub: EventHub) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        hub: EventHub,
+        on_interject: Callable[[str], bool] | None = None,
+    ) -> None:
         self.hub = hub
+        #: 收到插话时调用；返回 False 表示当前不接受（会话未开始/已结束）。
+        self.on_interject = on_interject
         self._stop_event = threading.Event()
         super().__init__(address, _Handler)
 
@@ -247,13 +324,19 @@ class SparkyServer(ThreadingHTTPServer):
         return self._stop_event.is_set()
 
 
-def start(hub: EventHub, *, host: str, port: int) -> tuple[SparkyServer, threading.Thread]:
+def start(
+    hub: EventHub,
+    *,
+    host: str,
+    port: int,
+    on_interject: Callable[[str], bool] | None = None,
+) -> tuple[SparkyServer, threading.Thread]:
     """绑定端口并在后台线程里开始服务。
 
     端口占用 → 抛 ``ConfigError``（**不换端口**）。
     """
     try:
-        server = SparkyServer((host, port), hub)
+        server = SparkyServer((host, port), hub, on_interject=on_interject)
     except OSError as exc:
         raise ConfigError(
             f"无法在 {host}:{port} 上启动本地网页：{exc}",
@@ -293,6 +376,7 @@ def open_browser(url: str) -> bool:
 
 __all__ = [
     "EventHub",
+    "InterjectionQueue",
     "SparkyServer",
     "start",
     "stop",

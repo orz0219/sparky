@@ -211,5 +211,19 @@ SPARKY_MODEL=deepseek-flash
    GLM 是 `open.bigmodel.cn` / `api.z.ai`，Qwen 是 `dashscope.aliyuncs.com` /
    `dashscope-intl.aliyuncs.com`。用错会认证失败或产生跨境计费。
 
-8. **密钥不进 git、不进日志、不进事件流。**
+8. **OpenCode Zen / Go 必须带 `x-opencode-session` 头**（2026-10-12 实测）。
+   缺了它直接 `400 MissingSessionID` —— 这不是可选优化，是**能不能连通**的前提。
+   该头由 `llm.py` 按 `base_url` 判定后自动加上（用 Sparky 自己的 session_id）。
+   实测 `OPENCODE_GO_API_KEY` 与 `OPENCODES_API_KEY` 在带上该头之后**可用**。
+
+   顺带一条：`~/.dsh/.credentials.yaml` 里的 `DEEPSEEK_API_KEY` 在
+   2026-10-12 用尽余额（`402 Insufficient Balance`），
+   所以本机当前可用的供应商其实是 OpenCode。切过去只要：
+
+   ```bash
+   python3 -m sparky "…" --base-url https://opencode.ai/zen/go/v1 \
+     --api-key-env OPENCODE_GO_API_KEY --model deepseek-v4.1-flash
+   ```
+
+9. **密钥不进 git、不进日志、不进事件流。**
    `llm-calls/` 下的请求快照在落盘前必须**擦除 Authorization 头**。

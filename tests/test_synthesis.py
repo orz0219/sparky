@@ -278,6 +278,42 @@ def _empty_outcome():
     return ReconOutcome()
 
 
+class TestInterjectionAppendix(unittest.TestCase):
+    """委托人的插话要写进附录 C —— 它改变了结论，事后必须能查到。"""
+
+    def setUp(self):
+        from .support import TempSession
+
+        self.temp = TempSession()
+        self.addCleanup(self.temp.cleanup)
+        self.session = self.temp.session
+
+    def _appendix(self):
+        from sparky.synthesis import _render_appendices
+
+        return _render_appendices(
+            make_brief(), make_single_panel(), _empty_outcome(), self.session
+        )
+
+    def test_no_section_when_no_interjection(self):
+        self.assertNotIn("委托人的插话", self._appendix())
+
+    def test_interjection_is_listed_with_delivery_round(self):
+        self.session.interjections.append(
+            {"text": "离线是硬要求", "received_round": 1, "delivered_round": 2}
+        )
+        text = self._appendix()
+        self.assertIn("委托人的插话", text)
+        self.assertIn("离线是硬要求", text)
+        self.assertIn("第 2 轮送达", text)
+
+    def test_undelivered_interjection_is_marked_honestly(self):
+        self.session.interjections.append(
+            {"text": "太晚了没送到", "received_round": 3, "delivered_round": None}
+        )
+        self.assertIn("未送达", self._appendix())
+
+
 class TestSummaryRewrite(unittest.TestCase):
     """摘要超长时要求模型**重写**，而不是截断。
 

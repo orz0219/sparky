@@ -127,6 +127,12 @@ class Session:
     ledger: Any | None = None
     #: S3 的完整结果（台账 + 逐轮发言 + 最终判定）
     debate: Any | None = None
+    #: 当前进行到第几轮（0 表示还没开始讨论）。
+    #: 网页靠它告诉用户"你的插话会在第几轮送达"。
+    current_round: int = 0
+    #: 委托人的插话记录：``{text, at, received_round, delivered_round}``。
+    #: 它同时进 transcript（可审计）与文档附录 C（可追溯）。
+    interjections: list[dict[str, Any]] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     doc_path: Path | None = None
     warnings: list[str] = field(default_factory=list)

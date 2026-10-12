@@ -79,16 +79,19 @@ def build_events() -> list[tuple[str, dict]]:
     seq.append(("turn.end", {"turn": {
         "round": 1, "persona_id": "p1",
         "say": "我先把底线摆出来：文字稿错一个字就是废品，所以我只认大模型，速度用整夜批处理解决。",
+        "summary": "我先把底线摆出来：文字稿错一个字就是废品，所以我只认大模型，速度用整夜批处理解决。",
         "actions": "新开 2 项", "abstained": False, "abstain_reason": None,
     }}))
     seq.append(("turn.end", {"turn": {
         "round": 1, "persona_id": "p2",
         "say": "降级到小模型的那条路我不接受，除非有人拿出实测数据打我的脸。",
+        "summary": "降级到小模型的那条路我不接受，除非有人拿出实测数据打我的脸。",
         "actions": "rebut x1、新开 1 项", "abstained": False, "abstain_reason": None,
     }}))
     seq.append(("turn.end", {"turn": {
         "round": 1, "persona_id": "p4",
-        "say": "（演示：这一轮调用失败，按弃权处理）",
+        "say": "",
+        "summary": "弃权，本轮没有发言（发言失败：LlmError: 演示用的失败）",
         "actions": "弃权", "abstained": True,
         "abstain_reason": "发言失败：LlmError: 演示用的失败",
     }}))
@@ -102,6 +105,10 @@ def build_events() -> list[tuple[str, dict]]:
         "focus": ["x1", "x2", "x3"], "detail": "还有 3 项未决，定向加轮。",
     }))
 
+    # 委托人插话：收到即发，下一轮送达
+    seq.append(("client.interjection", {"text": "离线是硬要求，不要为了质量牺牲它。", "received_round": 1}))
+    seq.append(("client.interjection.delivered", {"round": 2, "text": "离线是硬要求，不要为了质量牺牲它。"}))
+
     seq.append(("round.start", {
         "round": 2, "mode": "focus", "focus": ["x1", "x2", "x3"],
         "participants": ["p1", "p2", "p3", "p4"],
@@ -110,6 +117,7 @@ def build_events() -> list[tuple[str, dict]]:
     seq.append(("turn.end", {"turn": {
         "round": 2, "persona_id": "p2",
         "say": "x1 我撤回一半：机器吃得下就走大模型，吃不下才允许降级，但产物必须带降级标记。",
+        "summary": "x1 我撤回一半：机器吃得下就走大模型，吃不下才允许降级，但产物必须带降级标记。",
         "actions": "amend x1、提议取舍 1 项", "abstained": False, "abstain_reason": None,
     }}))
     seq.append(("disagreement.close", {

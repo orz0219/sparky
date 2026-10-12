@@ -26,8 +26,8 @@ from .support import TempSession, make_disagreement, make_ledger, make_outcome, 
 TURN_PROMPT_CONTRACT = {
     "system": {"name", "title", "stance", "cares_about"},
     "system_adversary": {"name", "stance", "bias"},
-    "opening": {"brief_json", "stances_overview", "your_memo"},
-    "focus": {"brief_json", "focus_items", "your_concession"},
+    "opening": {"brief_json", "client_notes", "stances_overview", "your_memo"},
+    "focus": {"brief_json", "client_notes", "focus_items", "your_concession"},
 }
 
 
@@ -159,6 +159,7 @@ class TestCollectTurnsIntegration(unittest.TestCase):
                 focus_ids=focus_ids,
                 history=history or [],
                 round_no=round_no,
+                client_notes="（委托人本次没有插话。）",
             ),
             client,
         )
@@ -201,6 +202,7 @@ class TestCollectTurnsIntegration(unittest.TestCase):
             focus_ids=("x1",),
             history=[],
             round_no=2,
+            client_notes="（委托人本次没有插话。）",
         )
         self.assertEqual([t.persona_id for t in turns], ["p1", "p2"])
         for persona in participants:
@@ -229,6 +231,7 @@ class TestCollectTurnsIntegration(unittest.TestCase):
             focus_ids=("x1", "x2"),
             history=[],
             round_no=2,
+            client_notes="（委托人本次没有插话。）",
         )
         p1_prompt = client.user_for(self.panel.by_id("p1").name)
         self.assertIn("甲议题", p1_prompt)
@@ -300,6 +303,7 @@ class TestCollectTurnsIntegration(unittest.TestCase):
             focus_ids=(),
             history=[],
             round_no=1,
+            client_notes="（委托人本次没有插话。）",
         )
         self.assertIn("调研失败缺席", client.users[0])
 
