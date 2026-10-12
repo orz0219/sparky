@@ -29,12 +29,25 @@
 项目内**只允许**出现非敏感配置（`base_url`、`model` 名），且 `.env` 一律被
 `.gitignore` 忽略。换 key 只改一处，新项目零配置。
 
-### 2.1 当前本机已有的密钥
+### 2.1 本机密钥现状（2026-10-12 实测）
 
-| 变量 | 状态 |
-|---|---|
-| `DEEPSEEK_API_KEY` | 存在（⚠️ 2026-09-15 曾实测返回 401，使用前请确认已补填有效 Key） |
-| `OPENCODE_API_KEY` | 存在 |
+| 变量 | 来源 | 状态 |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | `~/.config/llm/keys.env` | ❌ **401 Authentication Fails**（key 尾号 8313）—— 需要重新填 |
+| `DEEPSEEK_API_KEY` | `~/.dsh/.credentials.yaml` | ✅ 可用，`deepseek-flash` 与 `deepseek-v4-pro` 均可调 |
+| `OPENCODE_API_KEY` 等三把 | 两处 | ⚠️ 均返回 `400 MissingSessionID` —— 该端点要求 `x-opencode-session` 头，本项目暂未支持 |
+| `COMMANDCODES_API_KEY` | `~/.dsh/.credentials.yaml` | ❌ `insufficient credits` |
+
+**sparky 只从环境变量读密钥**（含被 shell 加载进来的 `keys.env`），
+刻意不去读 `~/.dsh/.credentials.yaml` —— 那是 DSH 的内部文件，
+让一个独立工具依赖它会把两者耦合在一起。
+
+所以本机要跑 sparky，需要把可用的那把 key 补进 `~/.config/llm/keys.env`：
+
+```bash
+# 把 ~/.dsh/.credentials.yaml 里 DEEPSEEK_API_KEY 的值填进去，然后
+export DEEPSEEK_API_KEY=sk-...
+```
 
 ### 2.2 缺密钥的行为
 
@@ -79,30 +92,41 @@
 
 ## 4. 配置项
 
+标记 `M1` 的已经可用。
+
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--base-url` | `https://api.deepseek.com/v1` | 供应商地址 |
-| `--api-key-env` | `DEEPSEEK_API_KEY` | 从哪个**环境变量名**读密钥（不是密钥本身） |
-| `--model` | `deepseek-flash` | 默认模型 |
-| `--model-strong` | 同 `--model` | 组阁 / 定稿用（这两步最吃能力） |
-| `--model-fast` | 同 `--model` | 例行发言用 |
-| `--panel-size` | auto | 人数，覆盖自动推断 |
-| `--max-rounds` | `4` | 轮数硬上限 |
-| `--budget-tokens` | 未设 | 总 token 硬上限 |
-| `--concurrency` | `4` | 同阶段并发度 |
-| `--context-dir` | 无 | 本地资料目录，按维度分配给各人设 |
-| `--dimensions-file` | 无 | 追加自定义维度库（YAML） |
-| `--personas-file` | 无 | 固定评审团（YAML），跳过 S1 生成 |
-| `--out` | `.sparky/sessions/` | 会话根目录 |
-| `--web` / `--no-web` | `--web` | 是否启动本地网页 |
-| `--port` | `8765` | 网页端口（占用时**报错**，不静默换端口） |
-| `--timeout` | `120` | 单次 LLM 请求超时（秒） |
-| `--resume <session_id>` | 无 | 从已有会话续跑 |
+| `--base-url` `M1` | `https://api.deepseek.com/v1` | 供应商地址 |
+| `--api-key-env` `M1` | `DEEPSEEK_API_KEY` | 从哪个**环境变量名**读密钥（不是密钥本身） |
+| `--model` `M1` | `deepseek-flash` | 默认模型 |
+| `--model-strong` `M1` | 同 `--model` | 组阁 / 定稿用（这两步最吃能力） |
+| `--model-fast` `M1` | 同 `--model` | 例行发言与调研用 |
+| `--panel-size` `M1` | auto | 指定目标人数（覆盖自动推断的公式），合法范围 3–7。**实际人数以维度覆盖为准**，不一致时会告警而不是强行裁剪 |
+| `--concurrency` `M1` | `4` | 同阶段并发度 |
+| `--context-dir` `M1` | 无 | 本地资料目录，其中的文本材料按设计维度分配给不同专家 |
+| `--out` `M1` | `.sparky/sessions` | 会话根目录 |
+| `--max-tokens` `M1` | `16000` | 单次调用输出预算（**含推理 token**）。带下限校验 256，见 §6 已知坑 6 |
+| `--temperature` `M1` | `0.7` | 采样温度（定稿各节固定用 0.3） |
+| `--timeout` `M1` | `180` | 单次请求超时秒数 |
+| `--quiet` `M1` | 关 | 只输出最终结果与错误 |
+| `--max-rounds` | `4` | 轮数硬上限（S3/S4 尚未实现，暂隐藏） |
+| `--budget-tokens` | 未设 | 总 token 硬上限（同上） |
+| `--dimensions-file` | 无 | 追加自定义维度库（M4，见 [`sparky/personas/README.md`](../sparky/personas/README.md)） |
+| `--personas-file` | 无 | 固定评审团（M4，同上） |
+| `--web` / `--port` | — | 本地网页（M3）。**M1 刻意不暴露这些开关**，见下 |
+| `--resume <session_id>` | — | 从已有会话续跑（M4） |
+
+### 4.0 为什么 M1 不暴露 `--web` / `--port` / `--resume`
+
+因为它们还没有实现。**暴露一个只会报错的开关，比不暴露更糟** ——
+用户会以为是自己的用法有问题，去翻文档、试参数，而不是去做该做的事。
+
+这些开关会在对应里程碑落地时一次性加上（M3 加 web 两个，M4 加 resume）。
 
 ### 4.1 关于 `--model-strong` / `--model-fast`
 
 分组讨论里，**组阁与定稿**决定成败（人设造歪了全场白聊，文档写砸了前面白干），
-而**例行发言**只是产出可被反驳的立场。分层用模型是省钱的主要手段。
+而**例行发言与调研**只是产出可被反驳的立场。分层用模型是省钱的主要手段。
 
 默认三者相同，是为了让第一次运行的行为最简单可预测。
 
@@ -147,10 +171,37 @@ SPARKY_MODEL=deepseek-flash
    `thinking` / `reasoning_effort` 只发给 DeepSeek；OpenCode 缺 `x-opencode-session`
    会报 `400 MissingSessionID`。发错参数不是被忽略，是会报错。
 
-6. **推理模型要给足输出预算与超时。**
-   响应里含大段 reasoning token（实测一次简单调用 `completion_tokens=106` 中
-   有 `reasoning_tokens=90`）。`max_tokens` 给小了会被截断成半句话，
-   而且**截断的 JSON 解析必然失败**。
+6. **推理模型的输出预算会被 reasoning 吃光。**
+   `deepseek-flash` 默认走思考，且 `max_tokens` 卡的是**推理 + 正文**的总和。
+   2026-10-12 实测：
+
+   | 场景 | `max_tokens` | `completion_tokens` | 其中 reasoning | 正文 |
+   |---|---|---|---|---|
+   | 简单问答 | 8 | 8 | — | **空** |
+   | 简单问答 | 40 | 40 | **40** | **空** |
+   | 简单问答 | 200 | ~100–150 | 96–145 | 正常 |
+   | 定稿「候选方案对比」（长输入） | 8000 | 8000 | **8000** | **空** |
+
+   即预算会**完全**被思考吃掉，而且 `finish_reason` 未必是 `length`。
+   三层防护：
+   - `config.py` 对 `--max-tokens` 设了 256 的下限，默认 16000
+   - `llm.py` 显式检测 `finish_reason=length` 与空正文，两者都硬报错
+   - **机械性任务关掉推理**（见 §6.1）
+
+### 6.1 关掉推理：`thinking: {"type": "disabled"}`
+
+对**不需要产生新判断**的调用（转写、制表、压缩、排期），可以关掉推理。
+同一次简单问答实测：completion token **188 → 22**，耗时减半，且不再有空正文风险。
+
+本项目在 `synthesis.py` 的 `SECTION_THINKING` 里逐节声明：
+
+| 节 | 开推理 | 理由 |
+|---|---|---|
+| 摘要 / 问题与目标 / 候选方案对比 / 里程碑 | 否 | 材料已由 S2 推理过，再推一遍是浪费 |
+| 最终方案 / 风险与失败模式 | **是** | 这两节是真正在做设计 |
+
+**`thinking` 是 DeepSeek 系专属参数**（见已知坑 5）：`llm.py` 按 `base_url`
+判断是否发送，非 DeepSeek 端点不会带上它 —— 这是**预期行为**，不是降级，所以不发告警。
 
 7. **CN 与 Global 是不同域名，不能互换。**
    Moonshot 是 `.cn` / `.ai`，MiniMax 是 `minimaxi.com` / `minimax.io`，

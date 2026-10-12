@@ -1,0 +1,78 @@
+{
+  "persona_id": "p6",
+  "core_claim": "本地播客工具的主输出必须是把章节写进 MP3 文件本身的 ID3v2.3 CHAP+CTOC 帧；Podcasting 2.0 chapters JSON 只能作为同一次运行顺带吐出的旁挂产物，不能当主交付，因为它的生效前提是 HTTP 托管。",
+  "pros": [
+    "ID3v2 CHAP+CTOC 是唯一能同时被 Apple Podcasts、Overcast、VLC、foobar2000 这一类已装机的播放器读到、且不需要任何网络请求的章节载体；Podcasting 2.0 chapters JSON 只覆盖实现了 podcast namespace 的一小批客户端，覆盖面是它的子集。",
+    "CHAP 的 Start/End 是 4 字节大端整数毫秒，1 小时音频的舍入上限是 0.5 毫秒，可以直接和 ffmpeg 探测出来的章节时间点做逐字节一致性校验；chapters JSON 用浮点秒，校验时反而要先反解浮点误差。",
+    "写入路径可以完全走命令行：ffmpeg 用 ;FFMETADATA1 的 [CHAPTER] 块配 -map_metadata 1 -codec copy 把章节并进 MP3，不重编码，成功与否直接体现在退出码上，能塞进 shell 管道和 cron。",
+    "两种输出可以从同一份内部章节模型序列化出来，章节边界、标题只算一次，不会出现两份输出时间轴打架。",
+    "章节和文字稿可以用同一个 Element ID 体系对齐，CHAP 的 Element ID 就是 JSON 里 toc/标题的锚点，后续做文字稿跳转不用另建索引。"
+  ],
+  "cons": [
+    "CHAP/CTOC 只定义在 ID3v2 容器里，也就是实际只有 MP3 能就地写。输入是 M4A、FLAC、Opus 时，要么整轨转码成 MP3（长音频代价高），要么退回 m4a chapter track / cue 文件，格式分叉的维护成本落在工具身上。",
+    "ID3v2.3 与 v2.4 对 CHAP 内嵌子帧 size 是否 syncsafe 的写法在各实现间不一致，写错版本会出现部分播放器读到 0 章或读到乱码章节，而且没有权威校验器能提前告诉你。稳妥做法是只写 v2.3，等于主动放弃 v2.4 的 UTF-8 章节标题能力。",
+    "写 ID3v2 标签是改写文件本身：原有 padding 不够时 mutagen 一类库会重写整个文件，对两小时的单集就是一次与文件等量的额外磁盘写入和数倍耗时，批量处理整个播客目录时这个放大很直观。",
+    "Podcasting 2.0 chapters JSON 单独交付对本地用户没有闭环价值——跑出来的 chapters.json 得用户自己上传托管，否则 <podcast:chapters> 拿不到它；把它当主输出等于把工具的价值推迟到用户完成一次本来没打算做的部署。",
+    "各客户端对章节的解析容错差异只能靠真机回归测试确认，本地离线环境测不了 Apple Podcasts 和 Overcast 的行为，等于把一部分验证责任转嫁给发布者。"
+  ],
+  "reasoning": "三个问题指向同一判断：chapters JSON 里每个 url 字段是可选外链、客户端不会去抓，但整份 JSON 依赖 HTTP 托管才生效，与本地跑不联网直接冲突，所以它只能是旁挂产物。真正落在磁盘上、播放器打开文件即读的只有 ID3v2 CHAP+CTOC。代价是两份时间轴要统一取整规则（整数毫秒 vs 浮点秒），写标签可能触发整文件重写，且 CHAP 的容器只限 MP3，源为 M4A/FLAC 时得转码或退回 sidecar。",
+  "evidence": [
+    {
+      "claim": "CHAP 帧体结构为：以 $00 结尾的 ISO-8859-1 Element ID、4 字节大端 Start time(ms)、4 字节大端 End time(ms)、可选的 4 字节 Start offset 与 End offset，其后可嵌入 TIT2 等普通子帧；CTOC 帧体为 Element ID、1 字节 Flags（bit0=top-level，bit1=ordered）、1 字节 Entry count、若干 $00 结尾的子 Element ID，其后同样可嵌入子帧。两者需处在同一个标签内。",
+      "source_url": null,
+      "confidence": "high",
+      "unverified": true
+    },
+    {
+      "claim": "CHAP 与 CTOC 只在 ID3v2.3 / v2.4 中定义；ID3v1、APE tag、Vorbis comment 都没有对应的章节载体。",
+      "source_url": null,
+      "confidence": "high",
+      "unverified": true
+    },
+    {
+      "claim": "ffmpeg 可以把带 [CHAPTER] 块的 ;FFMETADATA1 元数据文件通过 -map_metadata 1 -codec copy -id3v2_version 3 写进 MP3 的 ID3v2 章节帧，不需要重新编码音频。",
+      "source_url": null,
+      "confidence": "medium",
+      "unverified": true
+    },
+    {
+      "claim": "mutagen 没有内置的 CHAP/CTOC 帧类，需要用 mutagen.id3.Frame 或 BinaryFrame 自行实现帧体序列化；eyeD3、Mp3tag、kid3 则提供现成的章节写入能力（eyeD3 走 --add-chapter 参数）。",
+      "source_url": null,
+      "confidence": "medium",
+      "unverified": true
+    },
+    {
+      "claim": "Podcasting 2.0 chapters JSON 中每个 chapter 对象的 url 字段是可选字段，语义是「与该章节相关的外部链接」，客户端不会自动请求它，规范也未要求它在线可访问；与之并列的 img 字段同理是可选。",
+      "source_url": null,
+      "confidence": "medium",
+      "unverified": true
+    },
+    {
+      "claim": "RSS 里的 <podcast:chapters> 标签带 url 和 type 两个属性，其中 url 必须指向一个客户端能通过 HTTP 取到的 JSON 文件（type 通常为 application/json+chapters），因此整份 chapters JSON 只有在被托管之后才对客户端生效。",
+      "source_url": null,
+      "confidence": "medium",
+      "unverified": true
+    },
+    {
+      "claim": "chapters JSON 的 startTime 以秒为单位且允许小数，CHAP 的 Start/End 是整数毫秒，两套精度模型不同，互换时必须显式定义取整规则。",
+      "source_url": null,
+      "confidence": "high",
+      "unverified": true
+    },
+    {
+      "claim": "客户端支持面有差别：Apple Podcasts 与 Overcast 读 MP3 的 ID3 章节，AntennaPod 同时支持 ID3 章节与 Podcasting 2.0 chapters JSON，Pocket Casts 长期不支持章节；不同客户端对 ID3v2.3 与 v2.4 的容错程度也不一致。具体版本号和覆盖比例我没有可引用的实测数据。",
+      "source_url": null,
+      "confidence": "low",
+      "unverified": true
+    },
+    {
+      "claim": "写 ID3v2 标签在原有 padding 不足时需要重写整个文件，两小时 MP3 会产生一次与文件体积相当的写放大；这是基于标签区结构推算的量级估计，不是实测耗时。",
+      "source_url": null,
+      "confidence": "low",
+      "unverified": true
+    }
+  ],
+  "would_concede_if": "若在 Apple Podcasts（iOS 当前版）与 Overcast 上实测表明：只交付 Podcasting 2.0 chapters JSON、不写 ID3 CHAP/CTOC，章节列表能正常显示且时间戳偏移小于 1 秒，同时用户接受把 JSON 托管出去——我就放弃「ID3 为主输出」的立场。或者反向证据成立：用 ffmpeg 写出的 v2.3 CHAP+CTOC 在目标客户端上被忽略的比例超过 20%，我也会改判，把主输出换成 m4a chapter track 加 sidecar JSON。",
+  "searched": false,
+  "search_note": "本次未使用外部检索，全部结论基于模型的既有知识推演。"
+}

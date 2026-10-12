@@ -1,0 +1,254 @@
+{
+  "panel_size": 7,
+  "panel_size_reasoning": "维度数=8；ceil(8/1.5)=ceil(5.33)=6；clamp(3,7,6)=6。uncertainty=high，+1 得 7。约束中“不调用云服务/无网络可用”按隐私修正计 +1，得 8，再按上限 7 截断，最终 panel_size=7。7 名负责人覆盖 d1-d8，其中 d6 与 d8 由同一人负责。",
+  "auto_added_adversary": false,
+  "personas": [
+    {
+      "id": "p2",
+      "name": "郑砚秋",
+      "title": "端侧模型压缩工程师",
+      "role_type": "specialist",
+      "stance": "模型磁盘占用必须压到 200MB 以内，准确率掉两三个点完全值得，跑不起来的准确率等于零",
+      "bias": "倾向于相信量化后的 WER 劣化是均匀分布的，用整体平均值衡量损失",
+      "blind_spot": "看不到长音频里误差会累积放大，也看不到中英夹杂与专有名词在低比特量化下先崩",
+      "cares_about": [
+        "模型磁盘占用",
+        "int8 量化后 WER 变化",
+        "推理峰值 RSS"
+      ],
+      "dimensions": [
+        "d2"
+      ],
+      "info_scope": {
+        "questions": [
+          "把语音识别模型量化到 int8 之后，中文播客里的专有名词与英文术语错成什么样？",
+          "模型从 1.5GB 压到 200MB 时，冷启动内存峰值实际降了多少？",
+          "同一份权重用 q5 和 q8 两档量化，解码一集播客的耗时差多少？"
+        ],
+        "search_queries": [
+          "whisper int8 quantization WER degradation Chinese podcast",
+          "ggml q5_0 q8_0 model size speed comparison",
+          "onnx dynamic quantization encoder decoder memory footprint",
+          "distil-whisper Chinese accuracy model size tradeoff"
+        ],
+        "assigned_files": [],
+        "budget": {
+          "searches": 4,
+          "tokens": 20000
+        }
+      }
+    },
+    {
+      "id": "p3",
+      "name": "何长川",
+      "title": "长音频流式处理工程师",
+      "role_type": "specialist",
+      "stance": "两小时音频必须分块流式处理，任何把整段音频一次性读进内存的方案在他这里直接否决",
+      "bias": "偏好把块切得尽可能小，认为块越小内存曲线越平",
+      "blind_spot": "忽略块边界会切断词与句，重解码与上下文丢失的代价被他自己藏起来了",
+      "cares_about": [
+        "峰值内存占用",
+        "小时级音频端到端耗时",
+        "块边界重解码次数"
+      ],
+      "dimensions": [
+        "d3"
+      ],
+      "info_scope": {
+        "questions": [
+          "两小时音频按 30 秒分块时，需要多少秒重叠才不会把句子切两半？",
+          "用 VAD 停顿点切块和用固定窗口切块，哪种重解码次数更少？",
+          "处理两小时音频时，音频缓冲和解码结果缓存哪一块先把内存吃满？"
+        ],
+        "search_queries": [
+          "long form whisper chunk_length_s condition_on_previous_text",
+          "silero vad chunking long podcast memory",
+          "streaming asr overlap window boundary loss",
+          "transcribe 2 hour audio memory ceiling cpu"
+        ],
+        "assigned_files": [],
+        "budget": {
+          "searches": 4,
+          "tokens": 20000
+        }
+      }
+    },
+    {
+      "id": "p4",
+      "name": "温若岚",
+      "title": "章节切分算法工程师",
+      "role_type": "specialist",
+      "stance": "章节边界只能由话题漂移决定，静音检测顶多当个辅助信号，靠停顿切章会把一次停顿当一次转场",
+      "bias": "偏爱句嵌入相似度这一类做法，系统性低估再挂一个 embedder 带来的内存与耗时",
+      "blind_spot": "意识不到听众其实是靠主持人嘴里的口播提示判断章节边界的",
+      "cares_about": [
+        "章节边界与人工标注的 F1",
+        "切分模型附加体积",
+        "章节数量与人工标注的偏差"
+      ],
+      "dimensions": [
+        "d4"
+      ],
+      "info_scope": {
+        "questions": [
+          "话题漂移切分在中文播客上，边界 F1 一般能到多少？",
+          "一集播客切出 25 个章节，听众会觉得碎还是觉得细？",
+          "句嵌入模型和纯统计的 TextTiling，在中文口语文本上谁更稳？"
+        ],
+        "search_queries": [
+          "TextTiling topic segmentation podcast chapters evaluation",
+          "sentence embedding boundary detection Chinese spoken text",
+          "podcast chapter detection acoustic embedding",
+          "unsupervised topic segmentation F1 benchmark"
+        ],
+        "assigned_files": [],
+        "budget": {
+          "searches": 4,
+          "tokens": 20000
+        }
+      }
+    },
+    {
+      "id": "p5",
+      "name": "白承宇",
+      "title": "语音识别工程师",
+      "role_type": "specialist",
+      "stance": "准确率优先，宁可慢十倍也不接受错字，文字稿是用来读的，读起来别扭就等于没产出",
+      "bias": "倾向于加大解码 beam、换更大的模型，把耗时当成可以后置解决的小事",
+      "blind_spot": "忽略消费级 CPU 上用户根本等不起，实时率一崩整条流水线就废了",
+      "cares_about": [
+        "中文 WER",
+        "标点与大小写后的可读性",
+        "实时率 RTF"
+      ],
+      "dimensions": [
+        "d5"
+      ],
+      "info_scope": {
+        "questions": [
+          "中英夹杂的播客语音，本地开源模型的中文 WER 大概落在什么区间？",
+          "打开标点恢复和数字规范化之后，CPU 上的实时率会掉到多少？",
+          "主持人语速快、有笑声和口头禅的段落，识别错字集中在哪一类词上？"
+        ],
+        "search_queries": [
+          "faster-whisper ctranslate2 CPU RTF benchmark int8",
+          "whisper large-v3 Chinese WER podcast speech",
+          "punctuation restoration Chinese ASR offline model",
+          "paraformer offline Chinese ASR accuracy"
+        ],
+        "assigned_files": [],
+        "budget": {
+          "searches": 4,
+          "tokens": 24000
+        }
+      }
+    },
+    {
+      "id": "p6",
+      "name": "苏晚晴",
+      "title": "播客输出与交付工程师",
+      "role_type": "specialist",
+      "stance": "输出必须直接写进 ID3 章节帧，同时吐一份 Podcasting 2.0 JSON，其他格式都是在自娱自乐",
+      "bias": "偏爱管道友好的命令行，打心底轻视桌面界面用户",
+      "blind_spot": "忽略播放器对章节帧的支持其实很碎片化，写进去不一定看得见",
+      "cares_about": [
+        "章节格式能被多少播放器识别",
+        "时间戳精度",
+        "命令行退出码与管道可用性"
+      ],
+      "dimensions": [
+        "d6",
+        "d8"
+      ],
+      "info_scope": {
+        "questions": [
+          "ID3 的 CHAP 与 CTOC 帧具体长什么样，用什么工具能写进去？",
+          "Podcasting 2.0 的 chapters JSON 里 url 字段指向的文件必须在线上可访问吗？",
+          "常见播客客户端对 ID3 章节帧的支持情况差别有多大？"
+        ],
+        "search_queries": [
+          "ID3 CHAP CTOC frame podcast chapter specification",
+          "podcasting 2.0 chapters json schema url field",
+          "ffmpeg write id3 chapters metadata mp3",
+          "overcast pocket casts chapter support matrix"
+        ],
+        "assigned_files": [],
+        "budget": {
+          "searches": 4,
+          "tokens": 18000
+        }
+      }
+    },
+    {
+      "id": "p7",
+      "name": "韩景舟",
+      "title": "说话人分离工程师",
+      "role_type": "specialist",
+      "stance": "不区分说话人的多人口播文字稿等于半成品，读者根本分不清谁在说",
+      "bias": "习惯直接套用聚类阈值的默认值，认为调参是边缘工作",
+      "blind_spot": "忽略单人口播的播客压根不需要说话人分离，白烧一份算力",
+      "cares_about": [
+        "说话人区分错误率 DER",
+        "说话人切换点的时间准确度",
+        "分离环节额外内存与耗时"
+      ],
+      "dimensions": [
+        "d7"
+      ],
+      "info_scope": {
+        "questions": [
+          "两人对谈播客上，纯本地跑的说话人分离 DER 能压到什么水平？",
+          "分离环节要多挂一个声纹嵌入模型，内存代价和耗时各是多少？",
+          "主持人插话、两人抢话的片段，聚类会把它们并成同一个人吗？"
+        ],
+        "search_queries": [
+          "pyannote speaker diarization offline DER benchmark",
+          "3D-Speaker wespeaker offline diarization Chinese",
+          "whisperx diarization memory cost local gpu",
+          "speaker diarization CPU realtime factor overlap speech"
+        ],
+        "assigned_files": [],
+        "budget": {
+          "searches": 4,
+          "tokens": 20000
+        }
+      }
+    },
+    {
+      "id": "p8",
+      "name": "骆一鸣",
+      "title": "故障复盘与压力测试工程师（唱反调者）",
+      "role_type": "adversary",
+      "stance": "这个工具真正会死的地方不在模型，而在用户机器上的安装与硬件碎片化，任何对着开发机跑通的演示都不算证据",
+      "bias": "只承认在最差配置机器上复现过的结论，对一切基准数字和平均值先当作营销材料",
+      "blind_spot": null,
+      "cares_about": [
+        "安装失败率",
+        "首次运行到出结果的等待时间",
+        "OOM 崩溃的可复现条件"
+      ],
+      "dimensions": [
+        "d1",
+        "d3"
+      ],
+      "info_scope": {
+        "questions": [
+          "在 8GB 内存、无独显的笔记本上，这条流水线第一次跑到出结果会先卡在哪一步？",
+          "如果输入是 44.1kHz 立体声、时长两小时的 wav，光是前端解码这一步会不会先把内存吃光？",
+          "模型权重从未下载过又断网的情况下，工具给用户看到的报错长什么样子？"
+        ],
+        "search_queries": [
+          "whisper out of memory 8GB ram cpu crash",
+          "ffmpeg decode 2 hour wav peak memory usage",
+          "offline local tool first run failure modes",
+          "python audio pipeline peak memory profiling OOM"
+        ],
+        "assigned_files": [],
+        "budget": {
+          "searches": 5,
+          "tokens": 24000
+        }
+      }
+    }
+  ]
+}

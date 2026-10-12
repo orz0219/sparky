@@ -9,38 +9,57 @@
 
 每个模块的职责、输入、输出、失败模式 —— **失败模式不许留空**。
 
+标记 `M1` 的行是已经实现并有单测覆盖的；其余为设计定稿、待实现。
+
 | 模块 | 职责 | 输入 | 输出 | 失败模式 |
 |---|---|---|---|---|
-| `__main__.py` | 进程入口，`python3 -m sparky` 落点 | `sys.argv` | 退出码 | 参数非法 → 退出码 2 |
-| `cli.py` | 解析命令行、校验互斥参数、组装 `Config` | `sys.argv` | `Config` | 未知参数 / 冲突组合 → 报错退出 2 |
-| `config.py` | 装载配置与密钥；解析供应商 base_url 与模型 | `Config` + 环境变量 + `.env` | `RuntimeConfig` | **缺密钥 → 立即报错退出 3**，不进入任何阶段 |
-| `llm.py` | OpenAI 兼容 `/chat/completions` 调用，SSE 流式；重试策略；用量统计 | messages + 模型参数 | token 流 + `usage` | 网络错误 / 4xx / 5xx / 响应非 JSON → 记录完整请求快照后抛出 |
-| `events.py` | 事件模型定义与内存总线（发布/订阅） | `Event` | 回调 | 未知事件类型 → 抛错（不静默丢弃） |
-| `session.py` | 会话状态机、事件溯源持久化、`replay()` | `Event` | 磁盘 JSONL + 内存状态 | 磁盘不可写 → 立即报错退出 4；日志截断 → 报错并提示 `--resume` 不可用 |
-| `brief.py` | **S0 立案**：口语 → 结构化 `Brief` | 用户输入 + 可选上下文 | `Brief` | LLM 输出非 JSON / 缺必填字段 → 带原始输出报错 |
-| `personas.py` | **S1 组阁**：定人数、生成人设、分配信息面 | `Brief` | `Panel` | 生成的人设缺 adversary → **自动补位**（设计规则，非兜底）；人数越界 → 裁剪并告警 |
-| `recon.py` | **S2 调研**：N 人并发取证 | `Brief` + `Panel` | `list[StanceMemo]` | 某人调研失败 → 该人标记 `failed`，会话继续但文档中标注其缺席 |
+| `errors.py` `M1` | 异常层次与退出码映射 | — | `SparkyError` 子类 | 无 IO，无失败模式 |
+| `models.py` `M1` | 全部数据模型 + **严格**的 dict→对象解析 | LLM 返回的 dict | dataclass 实例 | 缺字段 / 类型不符 → 抛 `SchemaError`，带字段路径与原始值。**绝不填充默认值** |
+| `__main__.py` `M1` | 进程入口，串起六阶段并翻译失败 | `sys.argv` | 退出码 | 参数非法 → 2；缺密钥 → 3；磁盘不可写 → 4；其余 → 1；未预期异常打印完整回溯 |
+| `cli.py` `M1` | 解析命令行、校验取值、组装 `Config` | `sys.argv` | `Config` | 未知参数 / 取值越界 → 报错退出 2。**不提供 `--api-key`** |
+| `config.py` `M1` | 装载配置与密钥；`base_url` 校验；提示词与上下文材料装载 | `Config` + 环境变量 + `keys.env` + `.env` | `RuntimeConfig` + 渲染好的提示词 | **缺密钥 → 立即报错退出 3**，不进入任何阶段；密钥文件格式错误 → 报错不跳过坏行；提示词缺标记 / 占位符不匹配 → 报错 |
+| `llm.py` `M1` | OpenAI 兼容 `/chat/completions` 调用；调用前落盘快照；重试；用量统计；**截断与空正文检测** | messages + 模型参数 | `LlmReply`（正文 + usage） | 5xx/429/网络 → 重试 2 次后抛出；4xx → 立即抛出；响应非 JSON → 抛出；`finish_reason=length` 或正文为空 → 抛出（截断的 JSON 必然解析失败，不拿去解析） |
+| `events.py` `M1` | 21 类事件定义 + 同步发布/订阅总线 | `Event` | 回调 | 未登记的事件类型 → 抛 `ValueError`（不静默丢弃）；订阅者异常向上传递（表现层出错必须被看见） |
+| `session.py` `M1` | 会话目录与 `meta.json`（**跑之前就建**）、事件溯源 JSONL、上下文快照、**并发锁** | `Event` + payload | 磁盘 JSONL/JSON + 内存状态 | 目录不可写 / JSONL 追加失败 → `PersistenceError` 退出 4；会话 id 撞名 → 报错不覆盖 |
+| `render.py` `M1` | 终端渲染：订阅事件，打中文进度时间线 | `Event` | stdout | 事件类型没有渲染分支 → 抛 `KeyError`（实现遗漏必须暴露） |
+| `brief.py` `M1` | **S0 立案**：口语 → 结构化 `Brief` | 用户输入 + 可选上下文 | `Brief` | LLM 输出非 JSON / 缺字段 → 报错；维度数不在 3–8 → 报错；维度 id 重复 → 报错 |
+| `personas.py` `M1` | **S1 组阁**：定人数、生成人设、分配信息面 | `Brief` | `Panel` | 有维度没人负责 → 报错；两人追问清单重复 → 报错（信息面隔离被破坏）；无人是反方 → **自动补位**并告警（设计规则）；人数越界 → 裁剪并告警，**但绝不裁掉反方、也绝不制造维度空洞**，真裁不动就保留超员 |
+| `recon.py` `M1` | **S2 调研**：N 人并发取证 | `Brief` + `Panel` | `ReconOutcome`（含失败者） | 某人失败 → 记入 `failures` + 发事件，会话继续，文档附录 A 标注缺席；**全部失败 → 报错**；上下文文件无人认领 → 告警并写进附录 B |
+| `synthesis.py` `M1` | **S5 定稿**：装配骨架 + 6 节填充 + **9 项合规校验** + 写盘 | 全程状态 | `design.md` | 任一校验不过 → 报错且**不写盘**；台账条数比对不一致 → 报错（防篡改） |
 | `debate.py` | **S3 交锋**：组织多轮讨论、登记分歧 | 台账 + 上轮 `Turn` | 本轮 `list[Turn]` + 更新台账 | 某轮发言解析失败 → 该人本轮弃权并记入台账，不伪造发言 |
-| `consensus.py` | **S4 收敛**：纯函数判定 | `(Ledger, round, budget)` | `Decision` | 无 —— 纯函数无 IO，无失败模式（这是选它的理由之一） |
-| `synthesis.py` | **S5 定稿**：装配模板 + 填充内容 | 全程状态 | `design.md` | 必需章节无法填充 → 报错，**不生成残缺文档** |
+| `consensus.py` | **S4 收敛**：纯函数判定 | `(Ledger, round, budget)` | `Decision` | 无 —— 纯函数无 IO，无失败模式（这是选它的理由之一）。**禁止 import `llm`** |
 | `server.py` | 本地 HTTP 服务 + SSE 推送 + 静态资源 | 事件总线 | HTTP 响应 | 端口占用 → 报错并提示换端口，**不静默换端口** |
 | `web/*` | 前端（HTML/CSS/JS，零构建） | SSE 事件 | DOM | JS 异常 → 在页面顶部显示错误条，不留白屏 |
 | `tools/build_single_file.py` | 把包 + 前端资源打包成单个 `sparky.py` | 源码树 | `dist/sparky.py` | 资源缺失 → 报错，不产出半成品 |
 
+### 实现中新增的三个模块
+
+设计定稿时没有给这三者安排归属，M1 实现时补上并回填本文档：
+
+- **`errors.py`**：把"失败就说失败"落成可执行的退出码映射。
+  没有它，`__main__` 就得靠 `except Exception` 猜错误类型 —— 那正是本项目禁止的写法。
+- **`models.py`**：全部数据模型集中一处，避免各阶段各造一套；
+  更重要的是它承载了**严格解析**这条纪律（缺字段就报错，不填默认值）。
+- **`render.py`**：终端渲染原本被含糊地归在"表现层"里，没有具体模块。
+  它与 M3 的 SSE 服务是**并列的两个订阅者**，共用同一套事件协议。
+
 ## 2. 依赖方向（硬约束）
 
 ```
-       ┌──────────────┐
-       │ 表现层        │  server.py · web/*  ·  cli.py 的终端渲染
-       └──────┬───────┘
-              │  只允许依赖 ↓（事件总线）
-       ┌──────▼───────┐
-       │ 编排层        │  brief · personas · recon · debate · consensus · synthesis
-       └──────┬───────┘
-              │  只允许依赖 ↓
-       ┌──────▼───────┐
-       │ 基础层        │  llm.py · config.py · session.py · events.py
-       └──────────────┘
+       ┌────────────────────────────────────────────────┐
+       │ 表现层   render.py（终端）· server.py + web/*（M3）│
+       └───────────────┬────────────────────────────────┘
+                       │  只允许依赖 ↓（事件总线）
+       ┌───────────────▼────────────────────────────────┐
+       │ 编排层   __main__ · cli                        │
+       │          brief · personas · recon · debate      │
+       │          · consensus · synthesis               │
+       └───────────────┬────────────────────────────────┘
+                       │  只允许依赖 ↓
+       ┌───────────────▼────────────────────────────────┐
+       │ 基础层   config · llm · events · session        │
+       │          errors · models（全体共用底座）         │
+       └────────────────────────────────────────────────┘
 ```
 
 三条禁令，实现时用 review 守住：
@@ -113,7 +132,11 @@
 ### 为什么 `ledger.json` 和 `transcript.jsonl` 同时存在
 
 `transcript.jsonl` 是**权威**，`ledger.json` 只是**为了人看方便**的快照。
-两者不一致时以 transcript 为准（`session.py` 的 `replay()` 会重建并覆盖 ledger）。
+两者不一致时以 transcript 为准（`replay()` 会重建并覆盖 ledger）。
+
+> ⚠️ **M1 状态**：`ledger.json` 与 `replay()` 都还没实现 ——
+> 它们要到 M2（分歧台账）与 M4（`--resume`）才落地。
+> M1 的阶段目录里只有 `stances/`（S2 产物）与 `llm-calls/`。
 
 ### 为什么调用快照要单独存
 
@@ -213,4 +236,4 @@ User          cli/config     session      brief/personas/recon/debate/consensus/
 | 每 Agent 独立供应商 | `config.py` 的 `persona_model_map` | 进一步降低同质化 |
 | 自定义人设模板 | `personas/presets/*.yaml` | 用户固定评审团 |
 | 自定义输出模板 | `synthesis.py` 的模板路径参数 | 如输出 RFC / PRD 格式 |
-| 事后二次提问 | `session.py` 的 `replay()` + 单独 CLI 子命令 | "第 2 轮里成本官说了什么？" |
+| 事后二次提问 | 基于 transcript 的读取 + 单独 CLI 子命令 | "第 2 轮里成本官说了什么？" |

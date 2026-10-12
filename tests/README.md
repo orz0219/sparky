@@ -1,45 +1,53 @@
 # 测试
 
-> ⛔ 尚未实现（M1 开始建立）。
+> M1 已有 **87 个单测**，全部通过。用标准库 `unittest`，不引入 pytest
+> —— 零第三方依赖是硬约束（[ADR 0001](../docs/adr/0001-python-stdlib-single-entry.md)）。
 
-## 计划结构
+```bash
+python3 -m unittest discover -s tests -t .
+```
+
+## 结构
 
 ```
 tests/
-├── test_consensus.py      ★ 最优先：收敛判定的 6 个分支全覆盖
-├── test_personas.py         人数公式边界、反方强制、维度覆盖校验
-├── test_brief.py            JSON 解析失败路径、缺字段路径
-├── test_synthesis.py        9 项合规校验、防篡改的条数比对
-├── test_session.py          事件溯源、replay 一致性、截断日志处理
-├── test_llm.py              SSE 分帧、UA 设置、快照脱敏
-├── fakes/
-│   ├── fake_llm.py          假 LLM：按固定脚本返回预设响应
-│   └── fixtures/            若干样例 Brief / Panel / Ledger / Turn
-└── README.md
+├── __init__.py
+├── support.py          共用夹具：临时会话、Brief/Panel 构造器、一份「全过」的文档样板
+├── test_synthesis.py   ★ 9 项合规校验 + 节契约同步
+├── test_personas.py      人数裁剪、反方强制、维度覆盖、信息面隔离
+├── test_config.py        密钥/价格/提示词装载的严格性
+└── test_models.py        严格解析、会话持久化、并发安全
 ```
 
 ## 三条测试纪律
 
-1. **测试里不得真实调用 LLM。** 一律用 `fakes/fake_llm.py` 喂预设响应。
+1. **测试里不得真实调用 LLM。** 目前的测试全部是纯函数与纯 IO，
+   没有一处需要网络。要引入带 LLM 的测试时必须用假客户端。
    真实调用会让测试变慢、变贵、且结果不稳定 —— 那不是测试，是抽样。
 
-2. **`consensus.py` 必须有完整分支覆盖。** 它是纯函数，是最好测的模块，
-   也是决定"讨论什么时候停"的模块。**它的 6 个判定分支每一个都要有测试**，
-   包括判断顺序（`done` 必须优先于预算与轮数，否则"最后一轮刚好达成一致"
-   会被误判为未收敛）。
+2. **每个"应该通过"的用例旁边都要有一个"应该失败"的用例。**
+   本项目的检查大多是"拦截型"的（合规校验、防篡改比对、严格解析），
+   只测通过侧等于没测 —— 一个永远返回"通过"的校验函数也能让测试全绿。
+   写 `test_synthesis.py` 时这条尤其重要。
 
-3. **每修一个 bug，补一个能复现它的测试。** 这个项目的失败模式大多隐蔽
-   （并发下的台账不一致、事件序颠倒、合规校验被绕过），
-   没有回归测试就等于没有修。
+3. **每修一个 bug，补一个能复现它的测试。** 本项目已经踩过的坑
+   （见下）全都隐蔽，没有回归测试就等于没修。
 
-## 值得重点测的几件事
+## 已经踩过、已有回归测试的坑
 
-| 要测的 | 为什么 |
+| 坑 | 测试 |
 |---|---|
-| `decide()` 的分支顺序 | 顺序错了会在边界情况下误判 |
-| 轮内并发后台账一致性 | 这是最难查的一类 bug（见 [../docs/consensus.md](../docs/consensus.md) §2.1） |
-| S2 阶段的信息面隔离断言 | 违反它工具就退化了，必须有测试守住 |
-| 合规校验的条数比对 | 这是拦截 LLM 篡改台账的唯一机制 |
-| `transcript.jsonl` 末行截断 | 进程被杀是真实场景，不能崩在 replay 上 |
-| 请求快照里的 Authorization 被擦除 | 泄露密钥是不可接受的 |
-| 缺密钥时退出码为 3 | 这是"失败就说失败"原则的直接体现 |
+| `redact()` 把 `prompt_tokens` 也擦成 `<已擦除>`，附录 D 变废 | `test_usage_counters_are_not_redacted` |
+| 提示词占位符 `${name}` 被 `build_prompt(name=...)` 的参数名吃掉 | `test_placeholder_may_be_called_name` |
+| 改模板不改 `SECTION_INPUTS`（或反之）造成漂移 | `TestSectionContract` |
+| `_subsection` 把标题行算进正文，让"是否含否决理由"的检查永远为真 | `test_rejected_subsection_without_reason` |
+| 分隔行 `\|---\|---\|` 被当成表格数据行 | `test_separator_rows_are_not_counted_as_data` |
+| 并发 `emit` 撕裂 JSONL 行或跳号 | `test_concurrent_emit_keeps_transcript_intact` |
+| 并发下 LLM 调用编号重复，快照互相覆盖 | `test_concurrent_llm_call_indices_are_unique` |
+
+## 还没测到的（M2 的功课）
+
+- `consensus.decide()` 的 6 个判定分支 —— 它还没实现，但它是最该测的纯函数
+- 轮内并发后台账的一致性
+- S2 的信息面隔离断言（现在靠 `_build_recon_user` 里的检查，缺单测）
+- `--resume` 的续跑幂等性

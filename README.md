@@ -23,19 +23,20 @@ $ python3 -m sparky "我想做一个给播客自动生成章节和文字稿的�
 [定稿] .sparky/sessions/20261012-103000-podcast/design.md  ✍  约 6400 字
 ```
 
-> ## ⚠️ 当前状态：设计阶段，尚未实现
+> ## ⚙️ 当前状态：M1 已实现，M2 起待做
 >
-> 这个仓库目前是**设计方案 + 目录骨架**。
+> `python3 -m sparky "..."` 现在能真的跑出文档了 —— 但**还没有讨论阶段**。
 >
 > | 位置 | 状态 |
 > |---|---|
 > | [`docs/`](docs/) | ✅ 设计定稿，内容完整可引用 |
-> | [`sparky/prompts/`](sparky/prompts/) | ✅ 提示词设计草案 |
-> | [`sparky/personas/presets/`](sparky/personas/presets/) | ✅ 人设模板样例 |
-> | `sparky/**/*.py` | ⛔ **只有契约 docstring，无任何逻辑** |
-> | `sparky/web/` | ⛔ 前端目录已占位，未实现 |
+> | [`sparky/prompts/`](sparky/prompts/) | ✅ 提示词，**正在跑的**就是这些 |
+> | [`sparky/personas/presets/`](sparky/personas/presets/) | 📐 设计样例，尚未被代码读取 |
+> | S0 立案 / S1 组阁 / S2 调研 / S5 定稿 | ✅ 已实现，有单测 |
+> | S3 交锋 / S4 收敛 | ⛔ **未实现**（M2）—— 所以产出的文档会带「未经交锋检验」横幅 |
+> | [`sparky/web/`](sparky/web/) | ⛔ 未实现（M3） |
 >
-> 从 [docs/design.md](docs/design.md) 开始读。
+> 从 [docs/design.md](docs/design.md) 开始读，或直接看 [docs/roadmap.md](docs/roadmap.md)。
 
 ---
 
@@ -114,18 +115,46 @@ $ python3 -m sparky "我想做一个给播客自动生成章节和文字稿的�
 
 ## 快速开始
 
-> 尚未实现，以下为**目标形态**（见 [docs/roadmap.md](docs/roadmap.md)）。
+零第三方依赖，Python 3.11+ 标准库直接跑。
 
 ```bash
-# 零第三方依赖，Python 3.11+ 标准库直接跑
 git clone https://github.com/orz0219/sparky.git && cd sparky
 
-export DEEPSEEK_API_KEY=...        # 或用 ~/.config/llm/keys.env 统一管理
+# 密钥放这儿（也可以直接 export）
+echo 'DEEPSEEK_API_KEY=sk-...' >> ~/.config/llm/keys.env
+
 python3 -m sparky "你的想法，一两句话就行"
 ```
 
-浏览器会自动打开 `http://127.0.0.1:8765`，讨论以气泡流实时呈现；不加 `--web`
-则直接在终端里打印。
+跑完之后看 `.sparky/sessions/<会话>/design.md`。
+
+终端输出长这样：
+
+```
+[立案] 做一个本地运行的播客工具，自动产出文字稿与章节切分。
+  · d1 离线可行性（用户）
+  · d2 算力与模型体积（推断）
+  · d3 质量与耗时取舍（推断）
+  · … 共 8 个维度，其中 7 个是你没说过的
+[组阁] 判定需要 4 人
+  · p1 陆振声 · 端侧语音推理工程师（specialist）
+      立场：只接受在断网笔记本上能完整跑通的方案…
+  · p4 郑铁林 · 本地音频流水线故障复盘工程师（adversary） ★反方
+[调研] 4 条信息线并发取证…
+  ✓ p4：三小时双人抢话在 16GB 机器上不会 OOM——只要分块流式…
+[定稿] 已写出 .sparky/sessions/20261012-113111-…/design.md（8432 字）
+```
+
+跑测试：
+
+```bash
+python3 -m unittest discover -s tests -t .
+```
+
+**想看真实产物？** [`examples/01-podcast-transcriber/`](examples/01-podcast-transcriber/)
+里收了一次完整会话的全部产物：38542 字的设计文档、7 位专家的人设、
+每人的独立调研备忘、28 条事件溯源日志，以及一份**诚实记录
+"这次运行能证明什么、不能证明什么"**的 [观察笔记](examples/01-podcast-transcriber/notes.md)。
 
 ## 目录结构
 

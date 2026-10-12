@@ -4,7 +4,7 @@
 
 ---
 
-## M0 · 设计定稿 + 目录骨架 ← 当前在这里
+## M0 · 设计定稿 + 目录骨架 ← 已完成（2026-10-12）
 
 **产出**：`docs/` 全套设计文档、ADR、目录骨架、契约占位。
 
@@ -19,7 +19,7 @@
 
 ---
 
-## M1 · 最小可用闭环
+## M1 · 最小可用闭环 ← **已完成（2026-10-12）**
 
 **目标**：跑通 `一句话 → 文档`，先把"能产出合规文档"这件事验证掉。
 
@@ -30,15 +30,32 @@
 再往上加讨论。否则一旦出问题，分不清是主干坏了还是讨论坏了。
 
 **验收**：
-- [ ] `python3 -m sparky "..."` 能跑完，退出码 0
-- [ ] 产出文档通过 [output-spec.md](output-spec.md) §3 的**全部**检查项
-- [ ] 文档里至少 3 个维度是用户原话中**没有**的
-- [ ] 人设数量落在 3–7，且必含一个 adversary
-- [ ] 缺 `DEEPSEEK_API_KEY` 时**立即报错退出**，退出码 3
-- [ ] 会话目录含 `meta.json` / `brief.json` / `personas.json` / `transcript.jsonl` / `design.md`
-- [ ] 无 `--web` 时终端可读；有 `--web` 时（若已实现）能打开
+- [x] `python3 -m sparky "..."` 能跑完，退出码 0
+- [x] 产出文档通过 [output-spec.md](output-spec.md) §3 的**全部**检查项
+- [x] 文档里至少 3 个维度是用户原话中**没有**的
+- [x] 人设数量落在 3–7，且必含一个 adversary
+- [x] 缺 `DEEPSEEK_API_KEY` 时**立即报错退出**，退出码 3
+- [x] 会话目录含 `meta.json` / `brief.json` / `personas.json` / `transcript.jsonl` / `design.md`
+      （另有 `stances/` 与 `llm-calls/`，见 [architecture.md](architecture.md) §4）
+- [x] 无 `--web` 时终端可读
+- [x] 一次真实会话的完整产物已收进
+      [`examples/01-podcast-transcriber/`](../examples/01-podcast-transcriber/)：
+      38542 字文档、18 次调用、156976 token、通过全部 9 项校验
 
-**不做**：多轮讨论、联网检索、断点续跑、单文件打包。
+**不做**（也确实没做）：多轮讨论、联网检索、断点续跑、单文件打包、本地网页。
+
+**实现中的偏差记录**（详见 [architecture.md](architecture.md) §1 末节）：
+- 新增了 `errors.py` / `models.py` / `render.py` 三个模块 —— 设计定稿时没给它们安排归属
+- `llm.py` 在 M1 是**非流式**的。`turn.token` 打字机效果属于 M3，
+  届时加一个与之并列的 `stream()` 即可，不影响现有接口
+- `--web` / `--port` / `--resume` **刻意不在 M1 暴露** —— 暴露一个只会报错的开关
+  比不暴露更糟
+
+**实现中确认的两个真实问题**：
+1. **推理模型的输出预算会被 reasoning 吃光**：`max_tokens=40` 时
+   `completion_tokens` 全是 reasoning，正文为空。已加下限校验与显式检测。
+2. **提示词占位符不能用 `{x}`**：提示词正文里全是 JSON 花括号。
+   最终用 `${x}` + 位置限定参数（见 [configuration.md](configuration.md) §7）
 
 ---
 
