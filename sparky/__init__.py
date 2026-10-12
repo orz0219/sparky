@@ -8,7 +8,7 @@
 设计文档入口：docs/design.md
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = ["__version__"]
 
 # 本文件当前只有包声明，没有实现。

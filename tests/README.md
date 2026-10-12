@@ -1,6 +1,6 @@
 # 测试
 
-> M1 + M2 已有 **198 个单测**，全部通过。用标准库 `unittest`，不引入 pytest
+> M1 + M2 + M3 已有 **244 个单测**，全部通过。用标准库 `unittest`，不引入 pytest
 > —— 零第三方依赖是硬约束（[ADR 0001](../docs/adr/0001-python-stdlib-single-entry.md)）。
 
 ```bash
@@ -17,6 +17,9 @@ tests/
 ├── test_consensus.py  ★ S4 收敛：6 个判定分支 + 判断顺序 + 纯函数性
 ├── test_debate.py     ★ S3 主持人：台账状态机的每条规则
 ├── test_turn_prompts.py 发言提示词组装的**集成级**防漂移
+├── test_server.py     ★ 网页服务：事件扇出、SSE 分帧与历史补发（**真实 HTTP**）、
+│                        前端零外链与行数预算、端口冲突与重用
+├── test_streaming.py     SayExtractor：分片边界切在转义序列中间
 ├── test_synthesis.py    9 项合规校验 + 节契约同步 + 摘要两级阈值
 ├── test_personas.py     人数裁剪、反方强制、维度覆盖、信息面隔离
 ├── test_config.py       密钥/提示词/材料装载的严格性
@@ -56,10 +59,17 @@ tests/
 | 分隔行 `\|---\|---\|` 被当成表格数据行 | `test_separator_rows_are_not_counted_as_data` |
 | 并发 `emit` 撕裂 JSONL 行或跳号 | `test_concurrent_emit_keeps_transcript_intact` |
 | 并发下 LLM 调用编号重复，快照互相覆盖 | `test_concurrent_llm_call_indices_are_unique` |
+| `allow_reuse_address=False` 导致服务停掉后端口无法重用 | `test_same_port_can_be_reused_after_stop` |
+| 流式分片切在转义序列中间（`\` + `n`、`\u12` + `34`） | `TestEscapeBoundaries` |
+| 刷新页面重放上千条打字机增量 | `test_ephemeral_events_are_not_replayed` |
+| 前端漏处理某个事件类型 → 界面静默停在某个状态 | `test_every_known_event_type_has_a_handler` |
+| 前端偷偷引入外链 → 断网就废 | `test_no_external_resources` |
+| 开发夹具与事件协议脱节 | `TestDemoFixture` |
 
-## 还没测到的（M3/M4 的功课）
+## 还没测到的（M4 的功课）
 
-- SSE 事件流的分帧与补发历史
 - `--resume` 的续跑幂等性
 - `transcript.jsonl` 末行截断时的 `replay()` 行为
 - 真实多轮讨论下的"成本随轮数增长"是否符合预算模型
+- 前端的**交互**（点击台账跳到对应发言、折叠轮次）—— 那需要真浏览器，
+  目前只靠 `tools/demo_server.py` 目视确认

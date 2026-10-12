@@ -198,6 +198,7 @@ def make_turn(
     persona_id: str = "p1",
     round_no: int = 1,
     *,
+    say: str = "我这一轮要说的话。",
     responds_to: list[Reply] | None = None,
     opens: list[OpenProposal] | None = None,
     closes: list[CloseProposal] | None = None,
@@ -209,6 +210,7 @@ def make_turn(
     return Turn(
         round=round_no,
         persona_id=persona_id,
+        say=say,
         responds_to=list(responds_to or []),
         new_points=list(new_points or []),
         opens=list(opens or []),

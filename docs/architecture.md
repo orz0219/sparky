@@ -18,8 +18,8 @@
 | `__main__.py` `M1` | 进程入口，串起六阶段并翻译失败 | `sys.argv` | 退出码 | 参数非法 → 2；缺密钥 → 3；磁盘不可写 → 4；其余 → 1；未预期异常打印完整回溯 |
 | `cli.py` `M1` | 解析命令行、校验取值、组装 `Config` | `sys.argv` | `Config` | 未知参数 / 取值越界 → 报错退出 2。**不提供 `--api-key`** |
 | `config.py` `M1` | 装载配置与密钥；`base_url` 校验；提示词与上下文材料装载 | `Config` + 环境变量 + `keys.env` + `.env` | `RuntimeConfig` + 渲染好的提示词 | **缺密钥 → 立即报错退出 3**，不进入任何阶段；密钥文件格式错误 → 报错不跳过坏行；提示词缺标记 / 占位符不匹配 → 报错 |
-| `llm.py` `M1` | OpenAI 兼容 `/chat/completions` 调用；调用前落盘快照；重试；用量统计；**截断与空正文检测** | messages + 模型参数 | `LlmReply`（正文 + usage） | 5xx/429/网络 → 重试 2 次后抛出；4xx → 立即抛出；响应非 JSON → 抛出；`finish_reason=length` 或正文为空 → 抛出（截断的 JSON 必然解析失败，不拿去解析） |
-| `events.py` `M1` | 21 类事件定义 + 同步发布/订阅总线 | `Event` | 回调 | 未登记的事件类型 → 抛 `ValueError`（不静默丢弃）；订阅者异常向上传递（表现层出错必须被看见） |
+| `llm.py` `M1`+`M3` | OpenAI 兼容调用：**非流式** `complete`/`complete_json` 与**流式** `stream_json`（含 SSE 分帧与 `SayExtractor` 增量抽取）；调用前落盘快照；重试；用量统计；截断与空正文检测 | messages + 模型参数 | `LlmReply`（正文 + usage） | 5xx/429/网络 → 重试 2 次后抛出；4xx → 立即抛出；响应非 JSON → 抛出；`finish_reason=length` 或正文为空 → 抛出（截断的 JSON 必然解析失败，不拿去解析） |
+| `events.py` `M1`+`M3` | 21 类事件定义 + 同步发布/订阅总线 + **临时事件分级**（`turn.token` 不落盘） | `Event` | 回调 | 未登记的事件类型 → 抛 `ValueError`（不静默丢弃）；订阅者异常向上传递（表现层出错必须被看见） |
 | `session.py` `M1` | 会话目录与 `meta.json`（**跑之前就建**）、事件溯源 JSONL、上下文快照、**并发锁** | `Event` + payload | 磁盘 JSONL/JSON + 内存状态 | 目录不可写 / JSONL 追加失败 → `PersistenceError` 退出 4；会话 id 撞名 → 报错不覆盖 |
 | `render.py` `M1` | 终端渲染：订阅事件，打中文进度时间线 | `Event` | stdout | 事件类型没有渲染分支 → 抛 `KeyError`（实现遗漏必须暴露） |
 | `brief.py` `M1` | **S0 立案**：口语 → 结构化 `Brief` | 用户输入 + 可选上下文 | `Brief` | LLM 输出非 JSON / 缺字段 → 报错；维度数不在 3–8 → 报错；维度 id 重复 → 报错 |
@@ -28,8 +28,8 @@
 | `synthesis.py` `M1` | **S5 定稿**：装配骨架 + 6 节填充 + **9 项合规校验** + 写盘 | 全程状态 | `design.md` | 任一校验不过 → 报错且**不写盘**；台账条数比对不一致 → 报错（防篡改） |
 | `debate.py` `M2` | **S3 交锋**：组织多轮讨论、登记分歧。含主持人（纯代码登记台账） | 台账 + 上轮 `Turn` | `DebateResult`（台账 + 逐轮发言） | 某人发言失败 → 记**显式弃权**（带原因），不伪造发言；连续弃权 2 轮移出并告警；引用了不存在的人设/分歧 → 告警并忽略该条，不让一条坏引用废掉整场；`closes` 与 `tradeoff_proposals` 撞同一项 → 告警并以 `closes` 为准 |
 | `consensus.py` `M2` | **S4 收敛**：纯函数判定（6 个分支）+ `finalize` 收口 + 零分歧检出 | `(Ledger, round, Budget, max_rounds, stagnation)` | `Decision` | 无 —— 纯函数无 IO，无失败模式（这是选它的理由之一）。**禁止 import `llm`**，有单测守住 |
-| `server.py` | 本地 HTTP 服务 + SSE 推送 + 静态资源 | 事件总线 | HTTP 响应 | 端口占用 → 报错并提示换端口，**不静默换端口** |
-| `web/*` | 前端（HTML/CSS/JS，零构建） | SSE 事件 | DOM | JS 异常 → 在页面顶部显示错误条，不留白屏 |
+| `server.py` `M3` | 本地 HTTP 服务 + SSE 推送（**先补发历史、再进实时**，靠 `seq` 水位去重）+ 静态资源 + `POST /stop` | 事件总线 | HTTP 响应 | 端口占用 → 报错并提示换端口，**不静默换端口**；静态资源缺失 → 500 并写 stderr，**不返回空白页**；SSE 客户端断开 → 正常收尾路径，只捕获两个具体异常类型 |
+| `web/*` `M3` | 前端（HTML/CSS/JS，零构建、零外链，共 780 行） | SSE 事件 | DOM | JS 异常 → 顶部显示错误条；连接中断 → **不清屏**，已发生的事实必须留在屏幕上 |
 | `tools/build_single_file.py` | 把包 + 前端资源打包成单个 `sparky.py` | 源码树 | `dist/sparky.py` | 资源缺失 → 报错，不产出半成品 |
 
 ### 实现中新增的三个模块

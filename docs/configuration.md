@@ -113,15 +113,18 @@ export DEEPSEEK_API_KEY=sk-...
 | `--budget-tokens` | 未设 | 总 token 硬上限（同上） |
 | `--dimensions-file` | 无 | 追加自定义维度库（M4，见 [`sparky/personas/README.md`](../sparky/personas/README.md)） |
 | `--personas-file` | 无 | 固定评审团（M4，同上） |
-| `--web` / `--port` | — | 本地网页（M3）。**M1 刻意不暴露这些开关**，见下 |
+| `--web` / `--no-web` `M3` | `--web` | 是否启动本地网页并实时呈现讨论 |
+| `--port` `M3` | `8765` | 网页端口。**被占用时报错退出，不会自动换端口** |
+| `--no-browser` `M3` | 关 | 启动网页但不自动打开浏览器（远程/脚本里用） |
 | `--resume <session_id>` | — | 从已有会话续跑（M4） |
 
-### 4.0 为什么 M1 不暴露 `--web` / `--port` / `--resume`
+### 4.0 开关的暴露原则
 
-因为它们还没有实现。**暴露一个只会报错的开关，比不暴露更糟** ——
+**没有实现的开关不暴露** —— 暴露一个只会报错的开关，比不暴露更糟：
 用户会以为是自己的用法有问题，去翻文档、试参数，而不是去做该做的事。
 
-这些开关会在对应里程碑落地时一次性加上（M3 加 web 两个，M4 加 resume）。
+M1 因此刻意没有 `--web` / `--port` / `--resume`；
+M3 落地时一次性加上了网页相关的三个。`--resume` 仍在等 M4。
 
 ### 4.1 关于 `--model-strong` / `--model-fast`
 

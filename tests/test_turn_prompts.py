@@ -40,6 +40,7 @@ class FakeTurnClient:
 
     def __init__(self, payload: dict | None = None) -> None:
         self.payload = payload or {
+            "say": "我这一轮的主张。",
             "responds_to": [],
             "new_points": [],
             "opens": [],
@@ -50,8 +51,10 @@ class FakeTurnClient:
         self.systems: list[str] = []
         self.users: list[str] = []
         self.purposes: list[str] = []
+        #: 记录每次 on_delta 回调，供测试断言打字机路径
+        self.deltas: list[tuple[str, bool]] = []
 
-    def complete_json(self, *, system, user, purpose, **kwargs):  # noqa: D102
+    def _record(self, system: str, user: str, purpose: str):
         self.systems.append(system)
         self.users.append(user)
         self.purposes.append(purpose)
@@ -62,6 +65,20 @@ class FakeTurnClient:
             model="fake",
             call_index=len(self.systems),
         )
+
+    def complete_json(self, *, system, user, purpose, **kwargs):  # noqa: D102
+        return self._record(system, user, purpose)
+
+    def stream_json(self, *, system, user, purpose, on_delta=None, **kwargs):  # noqa: D102
+        if on_delta is not None:
+            # 模拟真实的流式：分两段吐出 say，验证增量拼接
+            say = self.payload.get("say", "")
+            half = len(say) // 2
+            for piece in (say[:half], say[half:]):
+                if piece:
+                    on_delta(piece, False)
+                    self.deltas.append((piece, False))
+        return self._record(system, user, purpose)
 
     def user_for(self, name: str) -> str:
         """按人设名字取回它的 user 提示词（system 里含名字）。"""
@@ -226,15 +243,16 @@ class TestCollectTurnsIntegration(unittest.TestCase):
         from sparky.errors import LlmError
 
         class Boom(FakeTurnClient):
-            def complete_json(self, *, system, user, purpose, **kwargs):
+            def stream_json(self, *, system, user, purpose, **kwargs):
                 if "专家1" in system:
                     raise LlmError("模拟调用失败")
-                return super().complete_json(
+                return super().stream_json(
                     system=system, user=user, purpose=purpose, **kwargs
                 )
 
         # 有实质内容的发言，才不算弃权 —— 空发言本身也是一种弃权
         payload = {
+            "say": "我主张这样做。",
             "responds_to": [],
             "new_points": ["我的主张"],
             "opens": [
@@ -260,7 +278,7 @@ class TestCollectTurnsIntegration(unittest.TestCase):
         """非 SparkyError 是代码 bug，必须炸出来而不是被当成"某人弃权"。"""
 
         class Broken(FakeTurnClient):
-            def complete_json(self, *, system, user, purpose, **kwargs):
+            def stream_json(self, *, system, user, purpose, **kwargs):
                 raise RuntimeError("这是代码 bug，不是模型失败")
 
         with self.assertRaises(RuntimeError):
@@ -284,6 +302,27 @@ class TestCollectTurnsIntegration(unittest.TestCase):
             round_no=1,
         )
         self.assertIn("调研失败缺席", client.users[0])
+
+    def test_streaming_emits_turn_tokens(self):
+        """发言必须走流式，并把 say 的增量广播出去 —— 界面靠它做打字机。"""
+        events: list = []
+        self.session.bus.subscribe(events.append)
+        self._collect(round_no=1)
+        tokens = [e for e in events if e.type == "turn.token"]
+        self.assertTrue(tokens, "一条 turn.token 都没有")
+        self.assertTrue(all("delta" in e.data for e in tokens))
+        joined = "".join(e.data["delta"] for e in tokens if e.data["persona_id"] == "p1")
+        self.assertIn("主张", joined)
+
+    def test_turn_tokens_are_not_persisted(self):
+        """临时事件不落盘 —— 一次发言上千条，写进审计日志会让它不可用。"""
+        self._collect(round_no=1)
+        lines = (self.session.root / "transcript.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        self.assertTrue(lines, "应该至少有 turn.start / turn.end 落盘")
+        for line in lines:
+            self.assertNotEqual(json.loads(line)["type"], "turn.token")
 
     def test_turns_are_returned_in_persona_order(self):
         """并发执行、**按序回收** —— 会话的可复现性依赖这一点。"""

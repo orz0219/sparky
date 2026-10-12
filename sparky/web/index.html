@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sparky · 头脑风暴</title>
+<!-- 零外链：没有 CDN、没有字体文件、没有图片。断网也能正常显示。 -->
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="logo">◆</span>
+    <span id="goal" class="goal">等待立案…</span>
+  </div>
+  <div class="meta">
+    <span id="round-badge" class="badge" hidden></span>
+    <span id="status" class="status">连接中…</span>
+    <button id="stop" type="button" hidden>停止</button>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<!-- 区域一：参会人设 -->
+<section id="panel-section" class="panel-section" hidden>
+  <h2 class="section-title">参会人设</h2>
+  <div id="panel" class="panel"></div>
+</section>
+
+<main>
+  <!-- 区域二：讨论流 -->
+  <section class="stream-section">
+    <h2 class="section-title">讨论流</h2>
+    <div id="stream" class="stream"></div>
+  </section>
+
+  <!-- 区域三：分歧台账 -->
+  <aside class="ledger-section">
+    <h2 class="section-title">分歧台账 <span id="ledger-count" class="count"></span></h2>
+    <div id="ledger" class="ledger"></div>
+  </aside>
+</main>
+
+<!-- 区域四：轮次时间线 -->
+<footer id="timeline" class="timeline">
+  <span class="stage" data-stage="0">立案</span>
+  <span class="sep">·</span>
+  <span class="stage" data-stage="1">组阁</span>
+  <span class="sep">·</span>
+  <span class="stage" data-stage="2">调研</span>
+  <span class="sep">·</span>
+  <span class="stage" data-stage="3">交锋</span>
+  <span class="sep">·</span>
+  <span class="stage" data-stage="4">收敛</span>
+  <span class="sep">·</span>
+  <span class="stage" data-stage="5">定稿</span>
+  <span id="timeline-note" class="note"></span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

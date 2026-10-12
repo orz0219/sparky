@@ -582,6 +582,15 @@ class Turn:
 
     round: int
     persona_id: str
+    #: 这个人这一轮**说出口的话**（模型自己写的自然语言，不是从结构化字段拼的）。
+    #:
+    #: 它必须放在 JSON schema 的**第一位**，原因有两个：
+    #:   1. 界面靠它做打字机效果 —— 流式前缀里最先出现的就是它，
+    #:      前端（其实是后端）能边收边抽，用户看到的是"人在说话"，
+    #:      而不是一段裸 JSON 被逐字敲出来；
+    #:   2. 它是发言的**人话版本**，终端与附录 C 直接用它，比拼
+    #:      "amend x1、新开 1 项" 这种机器摘要可读得多。
+    say: str
     responds_to: list[Reply]
     new_points: list[str]
     opens: list[OpenProposal]
@@ -609,6 +618,7 @@ class Turn:
         return cls(
             round=round_no,
             persona_id=persona_id,
+            say=_str(d, "say", ""),
             responds_to=[
                 Reply.from_dict(x, f"responds_to[{i}].")
                 for i, x in enumerate(_list_of(d, "responds_to", ""))
@@ -648,9 +658,20 @@ class Turn:
         )
 
     def summary(self) -> str:
-        """给终端与附录 C 用的一行摘要。"""
+        """给人看的一句话 —— 就是这个人自己写的 ``say``。"""
         if self.abstained:
-            return "（弃权：没有回应任何人）"
+            reason = f"（{self.abstain_reason}）" if self.abstain_reason else ""
+            return f"弃权，本轮没有发言 {reason}"
+        return self.say
+
+    def actions(self) -> str:
+        """给机器看的结构化动作摘要，如 ``amend x1、新开 1 项、关闭 1 项``。
+
+        与 ``summary()`` 分工明确：``summary`` 是**人话**（给讨论流与附录 C），
+        ``actions`` 是**台账动作**（给人核对"这一轮到底动了哪些条目"）。
+        """
+        if self.abstained:
+            return "弃权"
         parts = [f"{r.action} {r.disagreement_id}" for r in self.responds_to]
         if self.opens:
             parts.append(f"新开 {len(self.opens)} 项")
@@ -658,12 +679,14 @@ class Turn:
             parts.append(f"关闭 {len(self.closes)} 项")
         if self.tradeoff_proposals:
             parts.append(f"提议取舍 {len(self.tradeoff_proposals)} 项")
-        return "、".join(parts) + (f"；{self.new_points[0]}" if self.new_points else "")
+        return "、".join(parts) or "无动作"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "round": self.round,
             "persona_id": self.persona_id,
+            "say": self.say,
+            "actions": self.actions(),
             "responds_to": [r.to_dict() for r in self.responds_to],
             "new_points": self.new_points,
             "opens": [o.to_dict() for o in self.opens],

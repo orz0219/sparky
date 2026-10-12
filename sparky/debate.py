@@ -107,8 +107,16 @@ def run(
     brief: Brief,
     panel: Panel,
     outcome: ReconOutcome,
+    *,
+    should_stop: Callable[[], bool] | None = None,
 ) -> DebateResult:
-    """执行 S3 + S4，返回讨论结果。"""
+    """执行 S3 + S4，返回讨论结果。
+
+    ``should_stop`` 由网页的「停止」按钮驱动。它**只在轮与轮之间**被检查 ——
+    中途打断一轮会让并发中的几位专家看到不同的世界，破坏"轮内只读上轮快照"
+    这条不变量（见 docs/consensus.md §2.1）。
+    所以停止的语义是"**当前轮跑完就收口**"，不是"立刻掐断"。
+    """
     ledger = Ledger()
     result = DebateResult(ledger=ledger)
     brief_json = json.dumps(brief.to_dict(), ensure_ascii=False, indent=2)
@@ -127,6 +135,13 @@ def run(
                 f"讨论超过 {MAX_ROUND_SAFETY} 轮仍未结束，判定逻辑可能有问题",
                 hint="这是内部保险，不是产品行为。请检查 consensus.decide 的分支顺序。",
             )
+
+        if should_stop is not None and should_stop():
+            session.warn(
+                "stop_requested",
+                f"收到停止请求：第 {round_no} 轮不再开始，直接进入定稿。",
+            )
+            break
 
         focus_ids: tuple[str, ...] = () if round_no == 1 else (decision.focus if decision else ())
         participants = _pick_participants(
@@ -327,6 +342,7 @@ def _collect_turns(
                 _one_turn,
                 client=client,
                 runtime=runtime,
+                session=session,
                 persona=persona,
                 builder=builders[persona.id],
                 round_no=round_no,
@@ -351,6 +367,7 @@ def _collect_turns(
             turn = Turn(
                 round=round_no,
                 persona_id=persona.id,
+                say="",
                 responds_to=[],
                 new_points=[],
                 opens=[],
@@ -373,16 +390,37 @@ def _one_turn(
     *,
     client: LlmClient,
     runtime: RuntimeConfig,
+    session: Session,
     persona: Persona,
     builder: Callable[[Persona], str],
     round_no: int,
 ) -> Turn:
-    data, _ = client.complete_json(
+    """一个人的一次发言。**流式**调用，边收边把 ``say`` 广播给界面。
+
+    界面靠 ``turn.token`` 做打字机效果。这些事件是**临时事件**、不落盘 ——
+    一次发言上千条增量，写进 ``transcript.jsonl`` 会让审计日志彻底不可用
+    （见 ``events.EPHEMERAL_EVENT_TYPES``）。
+
+    并发下多个人的增量会交错到达，这是**符合预期**的：
+    界面上就是几个人同时在说话。
+    """
+
+    def on_delta(text: str, reset: bool) -> None:
+        session.emit(
+            events.TURN_TOKEN,
+            round=round_no,
+            persona_id=persona.id,
+            delta=text,
+            reset=reset,
+        )
+
+    data, _ = client.stream_json(
         system=_system_for(persona),
         user=builder(persona),
         purpose=f"S3 交锋·第{round_no}轮·{persona.id} {persona.name}",
         model=runtime.model_fast,
         temperature=0.7,
+        on_delta=on_delta,
     )
     return Turn.from_llm(persona.id, round_no, data)
 

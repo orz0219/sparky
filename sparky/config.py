@@ -286,6 +286,9 @@ class Config:
     max_tokens: int = 16000
     temperature: float = 0.7
     quiet: bool = False
+    web: bool = True
+    port: int = 8765
+    open_browser: bool = True
 
 
 @dataclass
@@ -308,6 +311,9 @@ class RuntimeConfig:
     max_tokens: int
     temperature: float
     quiet: bool
+    web: bool
+    port: int
+    open_browser: bool
 
     # 密钥绝不出现在 repr / str 里 —— 它们会进日志、进 traceback
     def __repr__(self) -> str:
@@ -365,6 +371,8 @@ def load_runtime_config(config: Config, *, cwd: Path | None = None) -> RuntimeCo
 
     if config.concurrency < 1:
         raise ConfigError(f"--concurrency 必须 ≥ 1，实际是 {config.concurrency}")
+    if not (1 <= config.port <= 65535):
+        raise ConfigError(f"--port 必须在 1–65535 之间，实际是 {config.port}")
     if config.max_tokens < 256:
         raise ConfigError(
             f"--max-tokens 必须 ≥ 256，实际是 {config.max_tokens}",
@@ -392,4 +400,7 @@ def load_runtime_config(config: Config, *, cwd: Path | None = None) -> RuntimeCo
         max_tokens=config.max_tokens,
         temperature=config.temperature,
         quiet=config.quiet,
+        web=config.web,
+        port=config.port,
+        open_browser=config.open_browser,
     )

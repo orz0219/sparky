@@ -2,11 +2,26 @@
 
 > ⛔ 尚未实现（计划在 M4）。
 
-## 计划中的文件
+## 现有文件
 
 | 文件 | 内容 |
 |---|---|
-| `build_single_file.py` | 把 `sparky/` 包与 `sparky/web/*` 前端资源拼成一个自包含的 `dist/sparky.py` |
+| `demo_server.py` ✅ | **前端开发夹具**：用合成事件回放一场讨论，不调用任何 LLM |
+| `build_single_file.py` ⛔ | 把 `sparky/` 包与 `sparky/web/*` 前端资源拼成一个自包含的 `dist/sparky.py`（M4） |
+
+### demo_server.py
+
+改前端时不必真跑一次头脑风暴（那要 4 分钟和几毛钱）：
+
+```bash
+python3 tools/demo_server.py            # 起服务并打开浏览器
+python3 tools/demo_server.py --port 9000 --no-browser
+```
+
+它注入一段**写死的合成事件序列**，覆盖全部四块区域，结果完全可复现。
+`tests/test_server.py::TestDemoFixture` 会核对它与事件协议没有脱节。
+
+它**不是产品的一部分** —— 只是给改前端的人省时间。
 
 ## 为什么需要它
 

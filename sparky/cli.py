@@ -157,6 +157,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="会话根目录，默认 ./.sparky/sessions",
     )
     group_run.add_argument("--quiet", action="store_true", help="只输出最终结果与错误")
+
+    group_web = parser.add_argument_group("本地网页")
+    group_web.add_argument(
+        "--web",
+        dest="web",
+        action="store_true",
+        default=True,
+        help="启动本地网页并实时呈现讨论（默认开启）",
+    )
+    group_web.add_argument(
+        "--no-web",
+        dest="web",
+        action="store_false",
+        help="不启动网页，只在终端输出",
+    )
+    group_web.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="网页端口，默认 8765。被占用时会报错退出，不会自动换端口",
+    )
+    group_web.add_argument(
+        "--no-browser",
+        dest="open_browser",
+        action="store_false",
+        default=True,
+        help="启动网页但不自动打开浏览器（远程/脚本里用）",
+    )
     return parser
 
 
@@ -173,6 +201,8 @@ def parse_args(argv: Sequence[str] | None = None) -> Config:
             f"--max-rounds 必须 ≥ 1，实际是 {args.max_rounds}。"
             f"第 1 轮是全员立场陈述，设 0 等于不讨论"
         )
+    if not (1 <= args.port <= 65535):
+        parser.error(f"--port 必须在 1–65535 之间，实际是 {args.port}")
     if args.budget_tokens is not None and args.budget_tokens < 1000:
         parser.error(f"--budget-tokens 必须 ≥ 1000，实际是 {args.budget_tokens}")
     if not args.idea.strip():
@@ -195,4 +225,7 @@ def parse_args(argv: Sequence[str] | None = None) -> Config:
         max_tokens=args.max_tokens,
         temperature=args.temperature,
         quiet=args.quiet,
+        web=args.web,
+        port=args.port,
+        open_browser=args.open_browser,
     )

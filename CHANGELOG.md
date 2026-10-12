@@ -6,10 +6,63 @@
 
 ### 计划中
 
-- **M3** 本地网页：`server.py` + SSE 实时气泡流
 - **M4** 信息检索接入、`--resume` 断点续跑、单文件打包
 
 详见 [docs/roadmap.md](docs/roadmap.md)。
+
+---
+
+## [0.4.0] —— 2026-10-12
+
+**M3 本地网页。现在能实时看着专家们吵 —— 逐字出现、分歧进台账。**
+
+### 新增
+
+- `server.py`：标准库 `ThreadingHTTPServer` + SSE 事件流 + 静态资源 + `POST /stop`。
+  **先补发历史、再进实时**，靠 `seq` 水位去重 —— 刷新页面既不丢事件也不重复显示。
+  只监听 `127.0.0.1`。
+- `sparky/web/{index.html,app.js,style.css}`：**741 行**、零构建、零外链、零依赖。
+  四块区域：人设卡 / 讨论流 / 分歧台账 / 轮次时间线。
+- `llm.py` 增加**流式调用** `stream_json`：SSE 分帧、边收边抽 `say`、
+  与流式共用同一套重试与截断检测（把"调用 → 校验 → JSON 重试"三段拆开复用）。
+- `llm.SayExtractor`：从流式 JSON 增量里抽出 `say` 的值，处理**分片切在转义序列中间**
+  的情况（`\` 与 `n` 之间、`\u12` 与 `34` 之间），不完整就原地等下一片。
+- 发言 schema 增加 **`say` 字段并要求放在第一位** —— 它是这个人**说出口的话**。
+- `tools/demo_server.py`：前端开发夹具，用合成事件回放一场讨论，
+  **不调用任何 LLM**，几秒钟就能看完整界面。
+- CLI：`--web` / `--no-web` / `--port` / `--no-browser`（M1 时刻意不暴露的那些）。
+- 测试从 198 增至 **244 个**。
+
+### 实现时确定的三件事
+
+1. **打字机效果靠 `say` 字段，不是靠显示裸 JSON。**
+   发言输出是结构化 JSON，直接显示流式原文会让用户看到
+   `{"say": "我反对……` 被逐字敲出来。把 `say` 放 schema 第一位
+   （JSON 顺序生成，流式前缀里最先出现的就是它），后端边收边抽，
+   界面拿到的是干净的人话。
+2. **`turn.token` 不落盘。** 一次发言上千条增量（实测两句话 266 个分片），
+   写进 `transcript.jsonl` 会让审计日志彻底不可用。事件分两级：
+   临时事件照常广播、不写盘。这不是静默丢弃，是按用途分级。
+3. **前端按帧批量渲染。** 逐个 token 写 DOM 会卡住页面，
+   增量先进缓冲区、由 `requestAnimationFrame` 每帧统一刷一次。
+
+### 顺带修掉的一个真实 bug
+
+`SparkyServer.allow_reuse_address` 原本设成 `False`，注释还写着
+"端口占用必须报错，不许悄悄接管" —— 那是把 `SO_REUSEADDR` 误解成了
+"防止端口被抢占"。它只管 **TIME_WAIT 残留**，不会让两个活跃服务共用端口。
+关掉它的实际后果是**服务停掉后端口一分钟内无法重用，重启直接失败**。
+已在真实场景里撞到（重启演示服务时报 `Address already in use`）。
+改为 `True` 并补了回归测试 —— 而"另一个进程正在监听时必须报错"
+这条性质开着它也照样成立，那条测试也仍然通过。
+
+### 目视验证
+
+用 `tools/demo_server.py` 的合成事件在 Chrome 里逐项确认了四块区域，
+并**借此发现两个缺陷**：
+- 气泡抬头显示 `undefined`（前端只存了 `name` 没存 `title`）
+- 一位专家因把 `tradeoff_proposals` 写成 `{"proposal":…, "topic":…}`
+  而整轮被记为弃权（机制正确：不伪造发言；但提示词该把字段名写死，已补）
 
 ---
 
@@ -185,7 +238,8 @@
 本版本刻意不含实现。设计阶段的产物是**决策与边界**，
 把它们写清楚之后，实现才不至于边写边改架构。
 
-[未发布]: https://github.com/orz0219/sparky/compare/v0.3.0...HEAD
+[未发布]: https://github.com/orz0219/sparky/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/orz0219/sparky/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/orz0219/sparky/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/orz0219/sparky/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/orz0219/sparky/releases/tag/v0.1.0

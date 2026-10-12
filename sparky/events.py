@@ -78,6 +78,16 @@ KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
     WARNING, ERROR,
 })
 
+#: **不落盘**的事件类型：高频、且对审计与回放没有价值。
+#:
+#: ``turn.token`` 一次发言就能产生上千条（实测一次两句话的回答有 266 个分片，
+#: 而一整个发言的 JSON 更长）。写进 ``transcript.jsonl`` 会让这份
+#: 「事件溯源日志」彻底不可用 —— 它的用途是**审计与回放**，
+#: 而逐 token 的增量对这两者都没有价值：完整正文已经在 ``turn.end`` 里了。
+#:
+#: 这些事件**照常广播**给订阅者（网页靠它们做打字机效果），只是不写盘。
+EPHEMERAL_EVENT_TYPES: frozenset[str] = frozenset({TURN_TOKEN})
+
 
 @dataclass
 class Event:

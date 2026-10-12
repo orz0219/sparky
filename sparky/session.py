@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import PersistenceError
-from .events import Event, EventBus
+from .events import EPHEMERAL_EVENT_TYPES, Event, EventBus
 from .models import Brief, Panel, ReconOutcome, Usage, now_iso
 
 #: 会话目录名里 slug 的最大长度。太长会让路径难以阅读与补全。
@@ -199,6 +199,11 @@ class Session:
 
         整个过程持锁：seq 分配与行写入必须是原子的，
         否则并发下 transcript 的行序会与实际发生顺序脱钩。
+
+        **高频事件不落盘**（见 ``events.EPHEMERAL_EVENT_TYPES``）：
+        ``turn.token`` 一次发言上千条，写进日志会让它彻底不可用。
+        它们照常广播，只是跳过写盘 —— 这不是「静默丢弃」，
+        而是**按用途分级**：审计日志收事件，不收逐 token 的增量。
         """
         with self._lock:
             self._seq += 1
@@ -209,14 +214,15 @@ class Session:
                 ts=now_iso(),
                 data=data,
             )
-            try:
-                with (self.root / "transcript.jsonl").open("a", encoding="utf-8") as handle:
-                    handle.write(event.to_json_line() + "\n")
-            except OSError as exc:
-                raise PersistenceError(
-                    f"写入 transcript.jsonl 失败：{exc}",
-                    hint="磁盘可能已满或目录被移除。会话已停止 —— 记不下来的会话无法审计。",
-                ) from exc
+            if event_type not in EPHEMERAL_EVENT_TYPES:
+                try:
+                    with (self.root / "transcript.jsonl").open("a", encoding="utf-8") as handle:
+                        handle.write(event.to_json_line() + "\n")
+                except OSError as exc:
+                    raise PersistenceError(
+                        f"写入 transcript.jsonl 失败：{exc}",
+                        hint="磁盘可能已满或目录被移除。会话已停止 —— 记不下来的会话无法审计。",
+                    ) from exc
         # 在锁外广播：订阅者做的是终端输出，不应阻塞其他线程的事件落盘
         self.bus.publish(event)
         return event

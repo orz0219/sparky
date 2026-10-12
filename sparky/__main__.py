@@ -45,6 +45,7 @@ from . import (
     events,
     personas as personas_stage,
     recon as recon_stage,
+    server as server_stage,
     synthesis,
 )
 from .config import load_runtime_config, mask_secret
@@ -59,6 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """跑完一次头脑风暴会议。返回进程退出码。"""
     renderer = TerminalRenderer()
     session: Session | None = None
+    http_server = None
 
     try:
         config = cli.parse_args(argv)
@@ -71,6 +73,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         bus = EventBus()
         bus.subscribe(renderer)
+
+        # 网页是事件总线的**另一个订阅者** —— 编排层完全不知道它在不在。
+        # 先于会话启动，这样页面能立刻连上，不会错过任何一条事件。
+        hub = server_stage.EventHub()
+        bus.subscribe(hub.publish)
+        if runtime.web:
+            http_server, _thread = server_stage.start(
+                hub, host="127.0.0.1", port=runtime.port
+            )
+            url = f"http://127.0.0.1:{runtime.port}"
+            renderer.note(f"本地网页：{url}")
+            if runtime.open_browser and not server_stage.open_browser(url):
+                # 打不开浏览器不是致命错误：服务已经起来了，用户手敲地址即可。
+                # 但必须**说出来**，不能静默。
+                renderer.fail(f"⚠ 没能自动打开浏览器，请手动访问 {url}")
+        else:
+            renderer.note("（--no-web：只在终端输出）")
+
         session = Session.create(
             runtime.out_root,
             runtime.raw_input,
@@ -110,7 +130,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         renderer.note(
             f"S3 交锋：第 1 轮全员立场陈述（{len(panel.personas)} 人并发）…"
         )
-        result = debate_stage.run(client, runtime, session, brief, panel, outcome)
+        result = debate_stage.run(
+            client,
+            runtime,
+            session,
+            brief,
+            panel,
+            outcome,
+            should_stop=server_stage.make_stop_check(http_server),
+        )
 
         # 「零分歧」是失败信号而不是顺利信号，必须显式暴露 ——
         # 否则用户会以为"大家一致同意"，而真相是"根本没辩起来"。
@@ -154,6 +182,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         renderer.fail("错误：遇到未预期的内部异常（这是 bug，不是你的用法问题）")
         traceback.print_exc()
         return EXIT_RUNTIME
+    finally:
+        # 无论成功、失败还是中断，都要把网页服务关掉，
+        # 否则进程会因为非 daemon 的连接而挂着不退。
+        server_stage.stop(http_server)
 
 
 def _config_snapshot(runtime, config) -> dict[str, object]:
