@@ -1,0 +1,13 @@
+# 统一换行符为 LF。
+# 本项目文档与代码都是 UTF-8 + LF，不要让 git 按平台自动转换 ——
+# 否则在 Windows 上 clone 会把整个文档的换行符改掉，产生无意义的巨大 diff。
+
+* text=auto eol=lf
+
+# 二进制文件不参与文本转换
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

@@ -1,0 +1,110 @@
+# 常见设计维度库（参考种子）
+#
+# 用途：S1 组阁时作为参考，帮模型想到"常见维度长什么样"。
+#       **不强制使用** —— 真正的维度必须从具体问题里长出来（见 ADR 0002）。
+#
+# 状态：设计样例，尚未被任何代码读取。
+# 对应设计：docs/personas.md §7
+
+version: 1
+
+dimensions:
+  - id: offline-feasibility
+    name: 离线可行性
+    triggers: ["离线", "本地", "不联网", "隐私", "内网"]
+    typical_questions:
+      - 模型/依赖的体积与内存峰值是多少？
+      - 无网络时哪些功能会退化？退化到什么程度？
+      - 首次启动需要下载多少东西？用户能接受吗？
+    typical_cares: ["包体大小", "首字延迟", "内存峰值", "冷启动时间"]
+    usual_tension: ["转写/推理质量", "处理速度"]
+
+  - id: cost-curve
+    name: 成本曲线
+    triggers: ["API", "云服务", "规模化", "用户量", "按量计费"]
+    typical_questions:
+      - 单次操作成本是多少？规模到 10 万次/天时是多少？
+      - 有没有成本随规模非线性增长的环节？
+      - 有没有更便宜但对用户不可见的替代路径？
+    typical_cares: ["单次成本", "月度账单", "成本拐点", "缓存命中率"]
+    usual_tension: ["响应速度", "结果质量"]
+
+  - id: data-model
+    name: 数据模型
+    triggers: ["存储", "同步", "多端", "历史记录", "查询"]
+    typical_questions:
+      - 核心实体的边界怎么划？哪些是多对多？
+      - 需要事务吗？一致性要求到什么级别？
+      - 数据量增长后哪张表先扛不住？
+    typical_cares: ["查询复杂度", "迁移成本", "一致性级别"]
+    usual_tension: ["开发速度", "schema 灵活性"]
+
+  - id: failure-modes
+    name: 失败模式
+    triggers: ["可靠性", "生产环境", "数据丢失", "长时间运行"]
+    typical_questions:
+      - 哪个环节坏掉会导致用户数据丢失？
+      - 进程被杀、断网、磁盘满，分别会发生什么？
+      - 失败是静默的还是用户可见的？
+    typical_cares: ["数据丢失风险", "可恢复性", "失败可见性"]
+    usual_tension: ["实现复杂度", "启动速度"]
+
+  - id: distribution
+    name: 分发与安装
+    triggers: ["工具", "桌面", "给朋友用", "跨平台", "安装"]
+    typical_questions:
+      - 目标用户怎么拿到它？需要装什么前置？
+      - 支持几个平台？每个平台的构建代价是多少？
+      - 升级怎么发？用户会漏版本吗？
+    typical_cares: ["安装步骤数", "平台覆盖", "升级摩擦"]
+    usual_tension: ["功能丰富度", "包体大小"]
+
+  - id: ux-form-factor
+    name: 产品形态
+    triggers: ["工具", "没说要界面", "命令行", "给不技术的人"]
+    typical_questions:
+      - GUI 还是 CLI？还是两者都要？
+      - 谁是主要用户？他们的技术水平如何？
+      - 最常用的那个操作，几步能完成？
+    typical_cares: ["操作步数", "首次使用上手时间", "误操作恢复"]
+    usual_tension: ["开发成本", "自动化能力"]
+
+  - id: security-privacy
+    name: 安全与隐私
+    triggers: ["隐私", "用户数据", "凭证", "多用户", "合规"]
+    typical_questions:
+      - 敏感数据存在哪？谁能读到？
+      - 有没有数据离开用户设备的路径？
+      - 密钥、凭证怎么存怎么传？
+    typical_cares: ["数据出境", "凭证泄露风险", "权限边界"]
+    usual_tension: ["功能便利性", "实现成本"]
+
+  - id: maintainability
+    name: 可维护性
+    triggers: ["长期", "多人协作", "开源", "会一直加功能"]
+    typical_questions:
+      - 依赖有多少？其中哪些是会烂尾的？
+      - 新人多久能改第一个 bug？
+      - 测试覆盖到什么程度才有意义？
+    typical_cares: ["依赖数量", "测试成本", "构建时间"]
+    usual_tension: ["开发速度", "功能完整度"]
+
+  - id: scalability
+    name: 规模上限
+    triggers: ["并发", "海量", "实时", "分布式"]
+    typical_questions:
+      - 第一个瓶颈会出现在哪？大概在什么量级？
+      - 是横向扩展还是纵向扩展？代价分别是多少？
+      - 有没有单点？
+    typical_cares: ["QPS 上限", "瓶颈位置", "扩容代价"]
+    usual_tension: ["架构复杂度", "一致性"]
+
+  - id: migration
+    name: 迁移与兼容
+    triggers: ["已有系统", "替换", "旧数据", "升级"]
+    typical_questions:
+      - 已有数据/用户怎么迁过来？要停机吗？
+      - 新旧能并存多久？
+      - 回滚方案是什么？
+    typical_cares: ["停机窗口", "回滚成本", "数据保真度"]
+    usual_tension: ["上线速度", "架构干净度"]
