@@ -12,14 +12,23 @@ from typing import Any
 
 from sparky.events import EventBus
 from sparky.models import (
+    ACTION_REBUT,
     ROLE_ADVERSARY,
     ROLE_SPECIALIST,
+    STATUS_OPEN,
     Brief,
+    CloseProposal,
     Dimension,
+    Disagreement,
     InfoScope,
+    Ledger,
+    OpenProposal,
     Panel,
     Persona,
+    Reply,
     SourcedText,
+    TradeoffProposal,
+    Turn,
 )
 from sparky.session import Session
 
@@ -121,6 +130,131 @@ def persona_payload(index: int, **overrides: Any) -> dict[str, Any]:
     }
     payload.update(overrides)
     return payload
+
+
+def make_outcome(panel: Panel, *, failing: tuple[str, ...] = ()):
+    """造一份 S2 调研结果，供 S3 的提示词组装使用。"""
+    from sparky.models import ReconOutcome, StanceMemo
+
+    outcome = ReconOutcome()
+    for persona in panel.personas:
+        if persona.id in failing:
+            outcome.failures.append((persona.id, "测试用调研失败"))
+            continue
+        outcome.memos.append(
+            StanceMemo(
+                persona_id=persona.id,
+                core_claim=f"{persona.name}的核心主张",
+                pros=[f"{persona.name}的优点"],
+                cons=[f"{persona.name}的代价一", f"{persona.name}的代价二"],
+                reasoning="因为所以",
+                evidence=[],
+                would_concede_if=f"如果{persona.name}的条件成立就改口",
+                searched=False,
+                search_note="本次未使用外部检索",
+            )
+        )
+    return outcome
+
+
+# ───────────────────── S3 / S4 夹具 ─────────────────────
+
+
+def make_disagreement(
+    disagreement_id: str = "x1",
+    *,
+    parties: tuple[str, str] = ("p1", "p2"),
+    status: str = STATUS_OPEN,
+    topic: str = "某个议题",
+    positions: dict[str, str] | None = None,
+    history: list | None = None,
+    tradeoff: dict | None = None,
+    resolution: dict | None = None,
+) -> Disagreement:
+    return Disagreement(
+        id=disagreement_id,
+        topic=topic,
+        parties=list(parties),
+        status=status,
+        positions=positions or {parties[0]: "甲的立场", parties[1]: "乙的立场"},
+        stakes=topic,
+        history=list(history or []),
+        resolution=resolution,
+        tradeoff=tradeoff,
+    )
+
+
+def make_ledger(
+    items: list[Disagreement] | None = None,
+    focus_counts: dict[str, int] | None = None,
+) -> Ledger:
+    ledger = Ledger(items=list(items or []), focus_counts=dict(focus_counts or {}))
+    # 让 new_id() 接着已有编号往下发，避免测试里出现 x1 撞号
+    ledger.opened_total = len(ledger.items)
+    return ledger
+
+
+def make_turn(
+    persona_id: str = "p1",
+    round_no: int = 1,
+    *,
+    responds_to: list[Reply] | None = None,
+    opens: list[OpenProposal] | None = None,
+    closes: list[CloseProposal] | None = None,
+    tradeoffs: list[TradeoffProposal] | None = None,
+    stance_snapshot: dict[str, str] | None = None,
+    new_points: list[str] | None = None,
+    abstain_reason: str | None = None,
+) -> Turn:
+    return Turn(
+        round=round_no,
+        persona_id=persona_id,
+        responds_to=list(responds_to or []),
+        new_points=list(new_points or []),
+        opens=list(opens or []),
+        closes=list(closes or []),
+        tradeoff_proposals=list(tradeoffs or []),
+        stance_snapshot=dict(stance_snapshot or {}),
+        abstain_reason=abstain_reason,
+    )
+
+
+def make_reply(
+    disagreement_id: str = "x1", *, action: str = ACTION_REBUT, reason: str = "理由"
+) -> Reply:
+    return Reply(disagreement_id=disagreement_id, action=action, reason=reason)
+
+
+def make_close(
+    disagreement_id: str = "x1", *, by: str = "convinced", because: str = "被说服了"
+) -> CloseProposal:
+    return CloseProposal(disagreement_id=disagreement_id, by=by, because=because)
+
+
+def make_tradeoff(
+    disagreement_id: str = "x1",
+    *,
+    choose: str = "选甲的方案",
+    when_to_flip: str = "如果体积不是瓶颈就选乙的",
+) -> TradeoffProposal:
+    return TradeoffProposal(
+        disagreement_id=disagreement_id, choose=choose, when_to_flip=when_to_flip
+    )
+
+
+def make_open(
+    *,
+    topic: str = "新的议题",
+    with_persona: str = "p2",
+    your_position: str = "我这样",
+    their_position: str = "他那样",
+) -> OpenProposal:
+    return OpenProposal(
+        topic=topic,
+        with_persona=with_persona,
+        your_position=your_position,
+        their_position=their_position,
+    )
 
 
 #: 一份**能通过全部 9 项合规校验**的最小文档。各测试基于它做破坏性修改。

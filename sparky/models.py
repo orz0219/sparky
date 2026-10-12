@@ -430,6 +430,446 @@ class ReconOutcome:
         return None
 
 
+# ─────────────────────────── S3 交锋 ───────────────────────────
+
+#: 分歧的生命周期状态。见 docs/consensus.md §3.2
+STATUS_OPEN = "open"
+STATUS_RESOLVED = "resolved"
+STATUS_TRADEOFF = "tradeoff"
+STATUS_STALEMATE = "stalemate"
+
+#: 一次回应的三种动作。**"不表态"不在其中** —— 不表态是弃权，由空 responds_to 表示。
+ACTION_SUPPORT = "support"
+ACTION_REBUT = "rebut"
+ACTION_AMEND = "amend"
+
+#: 关闭一项分歧的两种方式。
+CONVINCED = "convinced"  # 我被对方说服了
+CONCEDED = "conceded"  # 我放弃我的立场（未必被说服）
+
+
+def _str_map(d: Any, key: str, path: str) -> dict[str, str]:
+    """可选字符串→字符串映射。缺失或为 null 时返回空字典。"""
+    raw = d.get(key)
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise SchemaError(f"{path}{key} 期望是对象，实际是 {type(raw).__name__}")
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if not isinstance(v, str):
+            raise SchemaError(f"{path}{key}.{k} 期望是字符串，实际是 {type(v).__name__}")
+        out[str(k)] = v.strip()
+    return out
+
+
+def _list_of(d: Any, key: str, path: str) -> list[Any]:
+    """可选数组。缺失或为 null 时返回空列表。"""
+    raw = d.get(key)
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise SchemaError(f"{path}{key} 期望是数组，实际是 {type(raw).__name__}")
+    return raw
+
+
+@dataclass
+class Reply:
+    """对某条分歧的一次明确回应。"""
+
+    disagreement_id: str
+    action: str
+    reason: str
+
+    @classmethod
+    def from_dict(cls, d: Any, path: str) -> "Reply":
+        return cls(
+            disagreement_id=_str(d, "disagreement_id", path),
+            action=_enum(d, "action", path, (ACTION_SUPPORT, ACTION_REBUT, ACTION_AMEND)),
+            reason=_str(d, "reason", path),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "disagreement_id": self.disagreement_id,
+            "action": self.action,
+            "reason": self.reason,
+        }
+
+
+@dataclass
+class CloseProposal:
+    """关闭一项分歧。``by`` 区分"被说服"与"放弃"。"""
+
+    disagreement_id: str
+    by: str
+    because: str
+
+    @classmethod
+    def from_dict(cls, d: Any, path: str) -> "CloseProposal":
+        return cls(
+            disagreement_id=_str(d, "disagreement_id", path),
+            by=_enum(d, "by", path, (CONVINCED, CONCEDED)),
+            because=_str(d, "because", path),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"disagreement_id": self.disagreement_id, "by": self.by, "because": self.because}
+
+
+@dataclass
+class OpenProposal:
+    """提出一项新分歧。"""
+
+    topic: str
+    with_persona: str
+    your_position: str
+    their_position: str
+
+    @classmethod
+    def from_dict(cls, d: Any, path: str) -> "OpenProposal":
+        return cls(
+            topic=_str(d, "topic", path),
+            with_persona=_str(d, "with", path),
+            your_position=_str(d, "your_position", path),
+            their_position=_str(d, "their_position", path),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "topic": self.topic,
+            "with": self.with_persona,
+            "your_position": self.your_position,
+            "their_position": self.their_position,
+        }
+
+
+@dataclass
+class TradeoffProposal:
+    """把一项分歧**降级为取舍**：不解决它，而是写明"什么条件下该反过来选"。
+
+    这是本项目最看重的产出之一 —— 见 docs/consensus.md §7。
+    """
+
+    disagreement_id: str
+    choose: str
+    when_to_flip: str
+
+    @classmethod
+    def from_dict(cls, d: Any, path: str) -> "TradeoffProposal":
+        return cls(
+            disagreement_id=_str(d, "disagreement_id", path),
+            choose=_str(d, "choose", path),
+            when_to_flip=_str(d, "when_to_flip", path),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "disagreement_id": self.disagreement_id,
+            "choose": self.choose,
+            "when_to_flip": self.when_to_flip,
+        }
+
+
+@dataclass
+class Turn:
+    """讨论中的一次发言。
+
+    **回应义务**：第 1 轮的 ``responds_to`` 允许为空（那时还没有分歧编号）；
+    其余轮次里它为空即视为弃权，如实记账，**不伪造发言**。
+    弃权的完整判据见 ``abstained``。
+    """
+
+    round: int
+    persona_id: str
+    responds_to: list[Reply]
+    new_points: list[str]
+    opens: list[OpenProposal]
+    closes: list[CloseProposal]
+    tradeoff_proposals: list[TradeoffProposal]
+    stance_snapshot: dict[str, str]
+    #: 弃权的原因（仅当本轮是"发言失败按弃权处理"时非空）。
+    #: 它让附录 C 能如实写出"谁因为什么没发言"，而不是一个无来由的空白。
+    abstain_reason: str | None = None
+
+    @property
+    def abstained(self) -> bool:
+        """弃权：**什么都没说**。
+
+        判据必须包含 ``new_points``，不能只看 ``responds_to`` 与 ``opens`` ——
+        第 1 轮的 ``responds_to`` 本来就是空的（那时还没有分歧编号），
+        而提示词又明确鼓励"确实没有实质冲突就别硬造"。
+        只看前两者会把**一个正常陈述了立场、只是没发现冲突的人**判成弃权，
+        进而计入连续弃权、被移出后续讨论 —— 那是在冤枉诚实行为。
+        """
+        return not self.responds_to and not self.opens and not self.new_points
+
+    @classmethod
+    def from_llm(cls, persona_id: str, round_no: int, d: Any) -> "Turn":
+        return cls(
+            round=round_no,
+            persona_id=persona_id,
+            responds_to=[
+                Reply.from_dict(x, f"responds_to[{i}].")
+                for i, x in enumerate(_list_of(d, "responds_to", ""))
+            ],
+            new_points=_opt_str_list(d, "new_points", ""),
+            opens=[
+                OpenProposal.from_dict(x, f"opens[{i}].")
+                for i, x in enumerate(_list_of(d, "opens", ""))
+            ],
+            closes=[
+                CloseProposal.from_dict(x, f"closes[{i}].")
+                for i, x in enumerate(_list_of(d, "closes", ""))
+            ],
+            tradeoff_proposals=[
+                TradeoffProposal.from_dict(x, f"tradeoff_proposals[{i}].")
+                for i, x in enumerate(_list_of(d, "tradeoff_proposals", ""))
+            ],
+            stance_snapshot=_str_map(d, "stance_snapshot", ""),
+        )
+
+    def stance_key(self) -> tuple[tuple[str, str], ...]:
+        """立场快照的规范化形式，供停滞检测做比较。"""
+        return tuple(sorted(self.stance_snapshot.items()))
+
+    def reply_key(self) -> tuple[tuple[str, str, str], ...]:
+        """本轮的（分歧 id、动作、理由）三元组，规范化后用于检出"原地打转"。
+
+        理由只做空白归一化 —— **不**做语义比较。逐字比较会漏（模型每次措辞都变），
+        语义比较又要额外调模型（违背"S4 不调 LLM"这条设计约束）。
+        因此停滞检测另有轮级三元组兜底，见 docs/consensus.md §4.1。
+        """
+        return tuple(
+            sorted(
+                (r.disagreement_id, r.action, "".join(r.reason.split()))
+                for r in self.responds_to
+            )
+        )
+
+    def summary(self) -> str:
+        """给终端与附录 C 用的一行摘要。"""
+        if self.abstained:
+            return "（弃权：没有回应任何人）"
+        parts = [f"{r.action} {r.disagreement_id}" for r in self.responds_to]
+        if self.opens:
+            parts.append(f"新开 {len(self.opens)} 项")
+        if self.closes:
+            parts.append(f"关闭 {len(self.closes)} 项")
+        if self.tradeoff_proposals:
+            parts.append(f"提议取舍 {len(self.tradeoff_proposals)} 项")
+        return "、".join(parts) + (f"；{self.new_points[0]}" if self.new_points else "")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "round": self.round,
+            "persona_id": self.persona_id,
+            "responds_to": [r.to_dict() for r in self.responds_to],
+            "new_points": self.new_points,
+            "opens": [o.to_dict() for o in self.opens],
+            "closes": [c.to_dict() for c in self.closes],
+            "tradeoff_proposals": [t.to_dict() for t in self.tradeoff_proposals],
+            "stance_snapshot": self.stance_snapshot,
+            "abstained": self.abstained,
+            "abstain_reason": self.abstain_reason,
+        }
+
+
+@dataclass
+class Disagreement:
+    """台账里的一条分歧。
+
+    **只增不删**：状态可以变，条目永不删除 —— 最终文档的「候选方案对比」
+    要靠已解决条目里的信息来写。见 docs/consensus.md §3.3。
+    """
+
+    id: str
+    topic: str
+    parties: list[str]
+    status: str
+    positions: dict[str, str]
+    stakes: str
+    history: list[dict[str, Any]] = field(default_factory=list)
+    resolution: dict[str, Any] | None = None
+    tradeoff: dict[str, Any] | None = None
+
+    @property
+    def is_settled(self) -> bool:
+        return self.status in (STATUS_RESOLVED, STATUS_TRADEOFF)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "topic": self.topic,
+            "parties": self.parties,
+            "status": self.status,
+            "positions": self.positions,
+            "stakes": self.stakes,
+            "history": self.history,
+            "resolution": self.resolution,
+            "tradeoff": self.tradeoff,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "Disagreement":
+        """仅用于读回自己写出的台账快照（不解析 LLM 输出），因此校验从简。"""
+        return cls(
+            id=d["id"],
+            topic=d["topic"],
+            parties=list(d["parties"]),
+            status=d["status"],
+            positions=dict(d["positions"]),
+            stakes=d["stakes"],
+            history=list(d.get("history", [])),
+            resolution=d.get("resolution"),
+            tradeoff=d.get("tradeoff"),
+        )
+
+
+@dataclass
+class Ledger:
+    """分歧台账 —— 收敛判定的**唯一依据**。"""
+
+    items: list[Disagreement] = field(default_factory=list)
+    #: 已发出的分歧编号计数。单调递增，永不回收（回收会让历史记录指向错误的条目）。
+    opened_total: int = 0
+    #: 每项分歧被"定向加轮"针对过几次
+    focus_counts: dict[str, int] = field(default_factory=dict)
+    #: 模型提出、但超出分歧数上限因而**未被登记**的议题。
+    #: 保留它们是为了**不丢信息** —— 它们会列在附录 C 里，
+    #: 而不是被悄悄丢掉。见 debate.MAX_DISAGREEMENTS_PER_PERSONA。
+    dropped_topics: list[str] = field(default_factory=list)
+
+    @property
+    def open_items(self) -> list[Disagreement]:
+        return [d for d in self.items if d.status == STATUS_OPEN]
+
+    @property
+    def stalemates(self) -> list[Disagreement]:
+        return [d for d in self.items if d.status == STATUS_STALEMATE]
+
+    @property
+    def tradeoffs(self) -> list[Disagreement]:
+        return [d for d in self.items if d.status == STATUS_TRADEOFF]
+
+    @property
+    def resolved(self) -> list[Disagreement]:
+        return [d for d in self.items if d.status == STATUS_RESOLVED]
+
+    @property
+    def unresolved(self) -> list[Disagreement]:
+        """还没谈拢的（含 open 与 stalemate）。"""
+        return [d for d in self.items if d.status in (STATUS_OPEN, STATUS_STALEMATE)]
+
+    def by_id(self, disagreement_id: str) -> Disagreement | None:
+        for item in self.items:
+            if item.id == disagreement_id:
+                return item
+        return None
+
+    def require(self, disagreement_id: str, *, context: str) -> Disagreement:
+        item = self.by_id(disagreement_id)
+        if item is None:
+            raise SchemaError(
+                f"{context}：引用了不存在的分歧 {disagreement_id!r}；"
+                f"台账里现有：{[d.id for d in self.items]}"
+            )
+        return item
+
+    def new_id(self) -> str:
+        self.opened_total += 1
+        return f"x{self.opened_total}"
+
+    def digest(self) -> dict[str, int]:
+        """各状态的条目数，供事件与附录使用。"""
+        return {
+            "total": len(self.items),
+            "open": len(self.open_items),
+            "resolved": len(self.resolved),
+            "tradeoff": len(self.tradeoffs),
+            "stalemate": len(self.stalemates),
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "opened_total": self.opened_total,
+            "focus_counts": self.focus_counts,
+            "digest": self.digest(),
+            "dropped_topics": self.dropped_topics,
+            "items": [d.to_dict() for d in self.items],
+        }
+
+
+#: 讨论结果：台账 + 逐轮发言。
+@dataclass
+class DebateResult:
+    ledger: Ledger
+    rounds: list[list[Turn]] = field(default_factory=list)
+    #: S4 对最后一轮给出的判定（done 或 force_stop）
+    final_decision: Decision | None = None
+
+    @property
+    def round_count(self) -> int:
+        return len(self.rounds)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "round_count": self.round_count,
+            "final_decision": self.final_decision.to_dict() if self.final_decision else None,
+            "ledger": self.ledger.to_dict(),
+            "rounds": [[t.to_dict() for t in turns] for turns in self.rounds],
+        }
+
+
+# ─────────────────────────── S4 收敛 ───────────────────────────
+
+DECISION_DONE = "done"
+DECISION_ANOTHER_ROUND = "another_round"
+DECISION_FORCE_STOP = "force_stop"
+
+
+@dataclass(frozen=True)
+class Budget:
+    """预算快照。**冻结**，因为它是纯函数的输入，不许在判定过程中变化。"""
+
+    total_tokens: int
+    limit: int | None
+
+    @property
+    def exhausted(self) -> bool:
+        return self.limit is not None and self.total_tokens >= self.limit
+
+
+@dataclass(frozen=True)
+class Decision:
+    """收敛判定的结果。
+
+    ``another_round`` 一定带 ``focus`` —— Sparky **从不**让全员再发一轮言，
+    只召集分歧的当事双方。见 docs/consensus.md §5。
+    """
+
+    kind: str
+    reason: str
+    focus: tuple[str, ...] = ()
+    detail: str = ""
+
+    @property
+    def is_done(self) -> bool:
+        return self.kind == DECISION_DONE
+
+    @property
+    def is_force_stop(self) -> bool:
+        return self.kind == DECISION_FORCE_STOP
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "decision": self.kind,
+            "reason": self.reason,
+            "focus": list(self.focus),
+            "detail": self.detail,
+        }
+
+
 # ─────────────────────────── 成本统计 ───────────────────────────
 
 
@@ -479,4 +919,28 @@ __all__ = [
     "ReconOutcome",
     "Usage",
     "now_iso",
+    # S3 交锋
+    "STATUS_OPEN",
+    "STATUS_RESOLVED",
+    "STATUS_TRADEOFF",
+    "STATUS_STALEMATE",
+    "ACTION_SUPPORT",
+    "ACTION_REBUT",
+    "ACTION_AMEND",
+    "CONVINCED",
+    "CONCEDED",
+    "Reply",
+    "CloseProposal",
+    "OpenProposal",
+    "TradeoffProposal",
+    "Turn",
+    "Disagreement",
+    "Ledger",
+    "DebateResult",
+    # S4 收敛
+    "DECISION_DONE",
+    "DECISION_ANOTHER_ROUND",
+    "DECISION_FORCE_STOP",
+    "Budget",
+    "Decision",
 ]

@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import unittest
 
-from sparky.synthesis import HEADINGS, MAX_SUMMARY_CHARS, validate_document
+from sparky.synthesis import (
+    HEADINGS,
+    MAX_SUMMARY_CHARS,
+    SUMMARY_HARD_CAP,
+    validate_document,
+)
 
 from .support import (
     VALID_DOCUMENT,
@@ -53,12 +58,28 @@ class TestSummaryCheck(unittest.TestCase):
         self.assertTrue(any("摘要为空" in p for p in check(doc)))
 
     def test_overlong_summary(self):
+        """超过**硬上限**才判不合格；目标与硬上限之间是容忍区（见下）。"""
+        doc = VALID_DOCUMENT.replace(
+            "这是一个用于测试的最小项目，给测试用，核心思路是尽量简单。",
+            "字" * (SUMMARY_HARD_CAP + 1),
+        )
+        problems = check(doc)
+        self.assertTrue(any("超过硬上限" in p for p in problems))
+
+    def test_slightly_over_target_still_passes(self):
+        """401 字与 400 字对读者毫无区别 —— 不该为 1 个字否掉整场会话。"""
         doc = VALID_DOCUMENT.replace(
             "这是一个用于测试的最小项目，给测试用，核心思路是尽量简单。",
             "字" * (MAX_SUMMARY_CHARS + 1),
         )
-        problems = check(doc)
-        self.assertTrue(any("超过上限" in p for p in problems))
+        self.assertEqual(check(doc), [])
+
+    def test_exactly_at_hard_cap_passes(self):
+        doc = VALID_DOCUMENT.replace(
+            "这是一个用于测试的最小项目，给测试用，核心思路是尽量简单。",
+            "字" * SUMMARY_HARD_CAP,
+        )
+        self.assertEqual(check(doc), [])
 
     def test_summary_at_limit_passes(self):
         doc = VALID_DOCUMENT.replace(
@@ -307,22 +328,34 @@ class TestSummaryRewrite(unittest.TestCase):
         self.assertEqual(len(client.systems), 1, "没超限就不该重写")
 
     def test_overlong_triggers_one_rewrite(self):
-        body, client = self._run(["字" * 500, "字" * 300])
+        body, client = self._run(["字" * 600, "字" * 300])
         self.assertEqual(len(body), 300)
         self.assertEqual(len(client.systems), 2, "应当重写一次")
-        self.assertIn("400", client.systems[1], "重写的 system 里要说明上限")
-        self.assertIn("500", client.systems[1], "重写的 system 里要给出实际字数")
+        self.assertIn("360", client.systems[1], "重写要按更紧的目标要，留出执行误差")
+        self.assertIn("600", client.systems[1], "重写的 system 里要给出实际字数")
         self.assertTrue(any("summary_overlong" in w for w in self.session.warnings))
 
+    def test_slightly_over_target_is_accepted_not_retried(self):
+        """落在目标与硬上限之间：接受，但如实记一条告警，不假装它达标了。"""
+        body, client = self._run(["字" * 408])
+        self.assertEqual(len(client.systems), 1, "不该为这点溢出多花一次调用")
+        self.assertEqual(len(body), 408)
+        self.assertTrue(any("summary_slightly_over" in w for w in self.session.warnings))
+
+    def test_exactly_at_hard_cap_is_accepted(self):
+        body, client = self._run(["字" * SUMMARY_HARD_CAP])
+        self.assertEqual(len(client.systems), 1)
+        self.assertEqual(len(body), SUMMARY_HARD_CAP)
+
     def test_still_overlong_after_retry_falls_through_to_validation(self):
-        """两次都超长就交给合规校验报错 —— 不在这一层假装成功。"""
-        body, client = self._run(["字" * 500, "字" * 480])
-        self.assertEqual(len(body), 480)
+        """两次都超硬上限就交给合规校验报错 —— 不在这一层假装成功。"""
+        body, client = self._run(["字" * 700, "字" * 620])
+        self.assertEqual(len(body), 620)
         self.assertEqual(len(client.systems), 2)
         problems = check(VALID_DOCUMENT.replace(
             "这是一个用于测试的最小项目，给测试用，核心思路是尽量简单。", body
         ))
-        self.assertTrue(any("超过上限" in p for p in problems))
+        self.assertTrue(any("超过硬上限" in p for p in problems))
 
     def test_whitespace_does_not_count_toward_limit(self):
         body, client = self._run(["字" * 300 + "\n" * 50])
@@ -337,9 +370,9 @@ class TestCharCount(unittest.TestCase):
 
     def test_validator_and_rewrite_use_the_same_definition(self):
         """两处算法若不一致，会出现"重写通过但校验不通过"这种无法解释的情况。"""
-        from sparky.synthesis import MAX_SUMMARY_CHARS, char_count
+        from sparky.synthesis import char_count
 
-        body = "字 " * MAX_SUMMARY_CHARS  # 字之间有空格，有效字数正好等于上限
+        body = "字 " * MAX_SUMMARY_CHARS  # 字之间有空格，有效字数正好等于目标
         self.assertEqual(char_count(body), MAX_SUMMARY_CHARS)
         doc = VALID_DOCUMENT.replace(
             "这是一个用于测试的最小项目，给测试用，核心思路是尽量简单。", body

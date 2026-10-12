@@ -1,6 +1,6 @@
 # 测试
 
-> M1 已有 **87 个单测**，全部通过。用标准库 `unittest`，不引入 pytest
+> M1 + M2 已有 **198 个单测**，全部通过。用标准库 `unittest`，不引入 pytest
 > —— 零第三方依赖是硬约束（[ADR 0001](../docs/adr/0001-python-stdlib-single-entry.md)）。
 
 ```bash
@@ -12,42 +12,54 @@ python3 -m unittest discover -s tests -t .
 ```
 tests/
 ├── __init__.py
-├── support.py          共用夹具：临时会话、Brief/Panel 构造器、一份「全过」的文档样板
-├── test_synthesis.py   ★ 9 项合规校验 + 节契约同步
-├── test_personas.py      人数裁剪、反方强制、维度覆盖、信息面隔离
-├── test_config.py        密钥/价格/提示词装载的严格性
-└── test_models.py        严格解析、会话持久化、并发安全
+├── support.py           共用夹具：临时会话、Brief/Panel/Ledger/Turn 构造器、
+│                        「全过」的文档样板、假调研结果
+├── test_consensus.py  ★ S4 收敛：6 个判定分支 + 判断顺序 + 纯函数性
+├── test_debate.py     ★ S3 主持人：台账状态机的每条规则
+├── test_turn_prompts.py 发言提示词组装的**集成级**防漂移
+├── test_synthesis.py    9 项合规校验 + 节契约同步 + 摘要两级阈值
+├── test_personas.py     人数裁剪、反方强制、维度覆盖、信息面隔离
+├── test_config.py       密钥/提示词/材料装载的严格性
+└── test_models.py       严格解析、弃权语义、会话持久化、并发安全
 ```
 
-## 三条测试纪律
+## 四条测试纪律
 
-1. **测试里不得真实调用 LLM。** 目前的测试全部是纯函数与纯 IO，
-   没有一处需要网络。要引入带 LLM 的测试时必须用假客户端。
+1. **测试里不得真实调用 LLM。** 全部是纯函数与纯 IO，或喂假客户端。
    真实调用会让测试变慢、变贵、且结果不稳定 —— 那不是测试，是抽样。
 
 2. **每个"应该通过"的用例旁边都要有一个"应该失败"的用例。**
    本项目的检查大多是"拦截型"的（合规校验、防篡改比对、严格解析），
    只测通过侧等于没测 —— 一个永远返回"通过"的校验函数也能让测试全绿。
-   写 `test_synthesis.py` 时这条尤其重要。
 
-3. **每修一个 bug，补一个能复现它的测试。** 本项目已经踩过的坑
-   （见下）全都隐蔽，没有回归测试就等于没修。
+3. **每修一个 bug，补一个能复现它的测试。** 本项目已经踩过的坑（见下）
+   全都隐蔽，没有回归测试就等于没修。
+
+4. **判断顺序要单独测。** `decide()` 的六个分支各自正确还不够 ——
+   顺序错了会在边界情况下误判（例如"最后一轮刚好谈拢"被判成未收敛）。
+   `TestBranchOrder` 专门测这个。
 
 ## 已经踩过、已有回归测试的坑
 
 | 坑 | 测试 |
 |---|---|
+| 分歧生成失控 → "真收敛"从设计上不可达 | `TestDisagreementCap` |
+| 超上限的议题被悄悄丢掉 | `test_opens_beyond_cap_are_recorded_not_dropped` |
+| 为 1 个字的摘要溢出否掉整场会话 | `test_slightly_over_target_is_accepted_not_retried` |
+| "未决"的口径在 `describe()` 与终端渲染之间不一致 | `test_describe_counts_every_status` |
+| 第 1 轮正常陈述立场的人被判成"弃权" | `TestAbstentionSemantics` |
 | `redact()` 把 `prompt_tokens` 也擦成 `<已擦除>`，附录 D 变废 | `test_usage_counters_are_not_redacted` |
 | 提示词占位符 `${name}` 被 `build_prompt(name=...)` 的参数名吃掉 | `test_placeholder_may_be_called_name` |
 | 改模板不改 `SECTION_INPUTS`（或反之）造成漂移 | `TestSectionContract` |
-| `_subsection` 把标题行算进正文，让"是否含否决理由"的检查永远为真 | `test_rejected_subsection_without_reason` |
+| 发言提示词的块与代码调用对不上 | `TestPromptContract` |
+| `_subsection` 把标题行算进正文，让检查永远为真 | `test_rejected_subsection_without_reason` |
 | 分隔行 `\|---\|---\|` 被当成表格数据行 | `test_separator_rows_are_not_counted_as_data` |
 | 并发 `emit` 撕裂 JSONL 行或跳号 | `test_concurrent_emit_keeps_transcript_intact` |
 | 并发下 LLM 调用编号重复，快照互相覆盖 | `test_concurrent_llm_call_indices_are_unique` |
 
-## 还没测到的（M2 的功课）
+## 还没测到的（M3/M4 的功课）
 
-- `consensus.decide()` 的 6 个判定分支 —— 它还没实现，但它是最该测的纯函数
-- 轮内并发后台账的一致性
-- S2 的信息面隔离断言（现在靠 `_build_recon_user` 里的检查，缺单测）
+- SSE 事件流的分帧与补发历史
 - `--resume` 的续跑幂等性
+- `transcript.jsonl` 末行截断时的 `replay()` 行为
+- 真实多轮讨论下的"成本随轮数增长"是否符合预算模型

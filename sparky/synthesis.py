@@ -42,7 +42,7 @@ from . import events
 from .config import RuntimeConfig, build_prompt, load_prompt
 from .errors import SchemaError
 from .llm import LlmClient
-from .models import SOURCE_INFERRED, Brief, Panel, ReconOutcome
+from .models import SOURCE_INFERRED, Brief, Ledger, Panel, ReconOutcome
 from .session import Session
 
 #: 各节的规范标题。**代码写标题**，模型只写正文 ——
@@ -113,7 +113,21 @@ _PLACEHOLDER_LINE = re.compile(
     re.MULTILINE,
 )
 
+#: **目标**字数：提示词按这个数字要求模型。
 MAX_SUMMARY_CHARS = 400
+
+#: **硬上限**：合规校验实际拦截的阈值。
+#:
+#: 两级的理由很实在：模型对"不超过 400 字"的执行力大约是 ±10%，
+#: 一次真实会话连续两次落在 408 与 **401** —— 为 1 个字否掉整场 30 次调用，
+#: 代价与收益完全不成比例。而 401 字与 400 字对读者毫无区别。
+#:
+#: 所以：按 400 去要求（这是理想），到 500 才判不合格（这是底线）。
+#: 中间地带放行，不假装它达到了 400。
+SUMMARY_HARD_CAP = 500
+
+#: 重写时按这个数字要求 —— 留出执行误差的余量，而不是卡着 400 要。
+SUMMARY_REWRITE_TARGET = 360
 
 #: 摘要超长时的重写次数。
 #:
@@ -144,11 +158,12 @@ def run(
     brief: Brief,
     panel: Panel,
     outcome: ReconOutcome,
-    *,
-    tradeoff_count: int = 0,
-    stalemate_count: int = 0,
 ) -> Path:
-    """执行 S5。返回 ``design.md`` 的路径。"""
+    """执行 S5。返回 ``design.md`` 的路径。
+
+    取舍台账与未决问题的条数**直接从 ``session.ledger`` 推导**，不由调用方传入 ——
+    这样它们与合规校验比对的必然是同一份数据，不存在「传错数字」的可能。
+    """
     session.emit(events.SYNTHESIS_START, sections=[name for name, _ in LLM_SECTIONS])
 
     context = _build_context(brief, panel, outcome)
@@ -161,9 +176,10 @@ def run(
         else:
             bodies[key] = _fill_section(client, runtime, system, key, purpose, context)
 
+    ledger = session.ledger
     bodies["constraints"] = _render_constraints(brief)
-    bodies["tradeoffs"] = _render_tradeoffs(tradeoff_count)
-    bodies["open_questions"] = _render_open_questions(stalemate_count, session)
+    bodies["tradeoffs"] = _render_tradeoffs(ledger, panel)
+    bodies["open_questions"] = _render_open_questions(ledger, panel, session)
     appendices = _render_appendices(brief, panel, outcome, session)
 
     document = _assemble(brief, panel, session, bodies, appendices)
@@ -172,8 +188,8 @@ def run(
         document,
         brief=brief,
         panel=panel,
-        tradeoff_count=tradeoff_count,
-        stalemate_count=stalemate_count,
+        tradeoff_count=len(ledger.tradeoffs) if ledger else 0,
+        stalemate_count=len(ledger.stalemates) if ledger else 0,
     )
     if problems:
         raise SchemaError(
@@ -257,15 +273,23 @@ def _fill_summary(
         actual = char_count(body)
         if actual <= MAX_SUMMARY_CHARS:
             return body
+        if actual <= SUMMARY_HARD_CAP:
+            # 落在目标与底线之间：接受，但如实记一条告警，不假装它达标了
+            session.warn(
+                "summary_slightly_over",
+                f"摘要 {actual} 字，超过目标 {MAX_SUMMARY_CHARS} 字但在硬上限 "
+                f"{SUMMARY_HARD_CAP} 字以内，予以接受。",
+            )
+            return body
         if attempt == SUMMARY_ATTEMPTS:
             return body  # 交给合规校验报错
         session.warn(
             "summary_overlong",
-            f"摘要 {actual} 字，超过上限 {MAX_SUMMARY_CHARS} 字，"
-            f"正在要求模型重写（第 {attempt} 次）。",
+            f"摘要 {actual} 字，超过硬上限 {SUMMARY_HARD_CAP} 字，"
+            f"正在要求模型重写（第 {attempt} 次，目标 {SUMMARY_REWRITE_TARGET} 字）。",
         )
         correction = SUMMARY_LENGTH_CORRECTION.replace("${actual}", str(actual)).replace(
-            "${limit}", str(MAX_SUMMARY_CHARS)
+            "${limit}", str(SUMMARY_REWRITE_TARGET)
         )
         body = _fill_section(
             client,
@@ -359,26 +383,73 @@ def _render_constraints(brief: Brief) -> str:
     return "\n".join(lines)
 
 
-def _render_tradeoffs(count: int) -> str:
-    """§5 关键取舍台账。必须与台账条目数严格对齐。"""
-    if count == 0:
+def _cell(text: str, *, limit: int = 160) -> str:
+    """把一段文本塞进 markdown 表格单元格。
+
+    必须做两件事，否则表格会被撑坏：竖线转义（否则多出一列）、
+    换行折平（markdown 表格里不能有裸换行）。
+    """
+    flat = " ".join(text.split()).replace("|", "｜")
+    if len(flat) > limit:
+        flat = flat[: limit - 1] + "…"
+    return flat
+
+
+def _render_tradeoffs(ledger: Ledger | None, panel: Panel) -> str:
+    """§5 关键取舍台账。**必须与台账里 tradeoff 的条目数严格对齐。**
+
+    「什么条件下该反过来选」这一列是本节存在的**全部意义** ——
+    没有它，"取舍"就只是"我们随便选的"。所以缺条件时会被显式标出来，
+    而不是留一个空格子。
+    """
+    del panel  # 目前只需要台账；保留参数是为了将来把当事人姓名也列进表里
+    items = ledger.tradeoffs if ledger else []
+    if not items:
         return (
-            "本次会话没有登记任何取舍项。\n"
+            "本次讨论没有产生需要降级为取舍的分歧。\n"
             "\n"
-            "> 取舍台账中的每一项都来自讨论阶段的分歧记录。"
-            "没有取舍项意味着**没有经过交锋检验的取舍**，"
-            "不等于所有设计选择都已权衡充分。"
+            "> 取舍台账里的每一项，都来自讨论中某一方明确提出、且另一方没有明确反对的"
+            "「条件分歧」—— 能谈成共识的进共识，谈不成共识但能说清"
+            "「什么条件下该反过来选」的才会出现在这里。\n"
+            "> 本节为空**不等于**所有设计选择都已权衡充分；"
+            "本场讨论的实际收敛情况见附录 C 的分歧台账。"
         )
-    raise SchemaError(
-        f"收到 {count} 项取舍，但 M1 尚未实现讨论阶段，无法渲染取舍台账。"
-        "这说明调用方传入了不该出现的参数。"
-    )
+
+    lines = [
+        "| 取舍点 | 最终选择 | 放弃了什么 | 什么条件下该反过来选 |",
+        "|---|---|---|---|",
+    ]
+    for item in items:
+        tradeoff = item.tradeoff or {}
+        proposer = tradeoff.get("proposed_by", "")
+        given_up = [
+            position for party, position in item.positions.items() if party != proposer
+        ]
+        when_to_flip = str(tradeoff.get("when_to_flip", "")).strip()
+        lines.append(
+            "| {} | {} | {} | {} |".format(
+                _cell(item.topic),
+                _cell(str(tradeoff.get("choose", "（未记录）"))),
+                _cell("；".join(given_up) or "（未记录）"),
+                _cell(when_to_flip or "⚠️ 未记录条件 —— 这项取舍缺少决策依据"),
+            )
+        )
+    lines += [
+        "",
+        f"共 {len(items)} 项。每项的提出者与接受方式记录在附录 C 的分歧台账里。",
+    ]
+    return "\n".join(lines)
 
 
-def _render_open_questions(count: int, session: Session) -> str:
-    """§8 未决问题。必须与台账中的死锁条目数严格对齐。"""
-    if count == 0:
-        if not session.rounds:
+def _render_open_questions(ledger: Ledger | None, panel: Panel, session: Session) -> str:
+    """§8 未决问题。**必须与台账里 stalemate 的条目数严格对齐。**
+
+    这一节的职责是**如实呈现分歧**，不是替用户拍板 ——
+    所以一个「建议采用 A」的句子都不许出现。
+    """
+    items = ledger.stalemates if ledger else []
+    if not items:
+        if ledger is None or not ledger.items:
             return (
                 "本次会话**未运行讨论阶段**，因此没有经过交锋检验的议题，"
                 "也就没有登记未决问题。\n"
@@ -387,10 +458,53 @@ def _render_open_questions(count: int, session: Session) -> str:
                 "本节为空只是因为讨论没有发生；各专家的独立结论之间的冲突"
                 "尚未被显式检验过。请把它理解为「未知」，而不是「已决」。"
             )
-        return "本次讨论的全部议题均已收敛，无未决问题。"
-    raise SchemaError(
-        f"收到 {count} 项死锁，但 M1 尚未实现讨论阶段，无法渲染未决问题。"
-    )
+        return (
+            "本次讨论的全部议题均已收敛：要么达成了共识，要么被明确降级为"
+            "「取舍」（见第 5 节，那里写明了什么条件下该反过来选）。\n"
+            "\n"
+            "> 这**不**意味着方案已经没有风险 —— 见第 6 节的失败模式。"
+        )
+
+    round_no = len(session.rounds)
+    lines = [
+        f"> ⚠️ 以下 {len(items)} 项讨论未能达成一致，需要你决策。",
+        "",
+        "这些不是「没来得及聊」，而是**聊过了、双方都坚持、且谁也说不出"
+        "「什么条件下该选对方」**的议题。系统的职责是把它们如实交出来，"
+        "而不是替你拍板。",
+        "",
+    ]
+    for index, item in enumerate(items, start=1):
+        lines.append(f"### 8.{index} {item.topic}")
+        lines.append("")
+        for party, position in item.positions.items():
+            name = panel.by_id(party).name
+            lines.append(f"- **{name}（{party}）**：{position}")
+        lines.append(f"- **争议焦点**：{item.stakes}")
+        arguments = [
+            f"第 {h.get('round')} 轮 {h.get('by')}：{h.get('reason')}"
+            for h in item.history
+            if h.get("reason")
+        ]
+        if arguments:
+            lines.append("- **双方论据**：")
+            lines.extend(f"    - {text}" for text in arguments[-4:])
+        proposed = item.tradeoff
+        if proposed:
+            lines.append(
+                f"- **曾有过的降级尝试**：{proposed.get('proposed_by')} 提议选"
+                f"「{proposed.get('choose')}」，但没能就"
+                f"「{proposed.get('when_to_flip')}」达成一致。"
+            )
+        lines.append(
+            f"- **为什么 AI 无法决策**：讨论进行到第 {round_no} 轮，"
+            f"双方论据未再出现实质变化，且没有任何一方能写出"
+            f"「什么条件下应该反过来选」—— 这通常意味着这项分歧取决于"
+            f"你在本项目之外的价值排序（成本、时间、团队偏好），"
+            f"而不是技术事实。"
+        )
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _render_appendices(
@@ -448,15 +562,23 @@ def _render_appendices(
     lines += ["## 附录 C：讨论轮次摘要", ""]
     if not session.rounds:
         lines.append(
-            "本次会话**未运行讨论阶段**（S3 交锋 / S4 收敛尚未实现）。"
-            "因此本文档中的全部结论来自各专家的**独立调研**，"
-            "没有经过互相反驳的检验。"
+            "本次会话**未运行讨论阶段**。因此本文档中的全部结论来自各专家的"
+            "**独立调研**，没有经过互相反驳的检验。"
         )
     else:
         for index, turn_set in enumerate(session.rounds, start=1):
-            lines.append(f"### 第 {index} 轮")
+            mode = "全员立场陈述" if index == 1 else "定向加轮"
+            lines.append(f"### 第 {index} 轮（{mode}）")
             lines.append("")
-            lines.append(f"{len(turn_set)} 位专家发言。")
+            for turn in turn_set:
+                name = panel.by_id(turn.persona_id).name
+                lines.append(f"- **{name}**：{turn.summary()}")
+            lines.append("")
+        lines += _render_ledger_appendix(session.ledger, panel)
+        final = session.debate.final_decision if session.debate else None
+        if final is not None:
+            lines.append("")
+            lines.append(f"**收口判定**（{final.kind} / {final.reason}）：{final.detail}")
 
     usage = session.usage
     lines += [
@@ -476,15 +598,90 @@ def _render_appendices(
     return "\n".join(lines)
 
 
+def _render_ledger_appendix(ledger: Ledger | None, panel: Panel) -> list[str]:
+    """附录 C 的分歧台账全表。**不删任何条目**（docs/consensus.md §3.3）。
+
+    已解决的分歧也列出来 —— 最终文档的「候选方案对比」正是从它们那里来的。
+    """
+    if ledger is None or not ledger.items:
+        return ["### 分歧台账", "", "本次讨论没有登记任何分歧。"]
+
+    lines = ["### 分歧台账", "", "| 编号 | 议题 | 当事人 | 最终状态 | 结论摘要 |", "|---|---|---|---|---|"]
+    status_text = {
+        "open": "未决",
+        "resolved": "已解决",
+        "tradeoff": "降级为取舍",
+        "stalemate": "未决（僵局）",
+    }
+    for item in ledger.items:
+        parties = "、".join(panel.by_id(p).name for p in item.parties)
+        if item.resolution:
+            conclusion = (
+                f"{item.resolution.get('by')} "
+                f"{'被说服' if item.resolution.get('kind') == 'convinced' else '让步'}："
+                f"{item.resolution.get('because', '')}"
+            )
+        elif item.tradeoff and item.status == "tradeoff":
+            conclusion = f"取舍：{item.tradeoff.get('choose', '')}"
+        elif item.status == "stalemate":
+            conclusion = "双方论据未再变化，交给人类决策"
+        else:
+            conclusion = "讨论结束仍未收敛"
+        lines.append(
+            f"| {item.id} | {_cell(item.topic)} | {_cell(parties)} | "
+            f"{status_text.get(item.status, item.status)} | {_cell(conclusion)} |"
+        )
+    lines += ["", f"共 {len(ledger.items)} 项。台账**只增不删** —— 已解决的条目同样保留，"
+                  f"它们是第 3 节「候选方案对比」的来源。"]
+    if ledger.dropped_topics:
+        lines += [
+            "",
+            f"### 超出分歧上限、未登记为分歧的议题（{len(ledger.dropped_topics)} 项）",
+            "",
+            "本次讨论登记的分歧数达到了上限，以下是专家提出但**未被登记**的议题。",
+            "它们没被丢掉，但也没有经过交锋检验 —— 请当作「专家认为值得想、"
+            "但本轮没来得及辩」的线索。",
+            "",
+        ]
+        lines += [f"- {topic}" for topic in ledger.dropped_topics]
+    return lines
+
+
 def _render_banner(session: Session) -> str:
-    """文档顶部横幅。未跑讨论时如实说明 —— 不许让读者以为吵过了。"""
-    if session.rounds:
-        return ""
+    """文档顶部横幅。
+
+    两种情况都必须在读者开始读之前说清楚：
+
+    · **没跑讨论** —— 结论未经交锋检验
+    · **跑了但零分歧** —— 这是**失败信号**，不是顺利信号（docs/consensus.md §6）
+    """
+    ledger = session.ledger
+    if not session.rounds:
+        return (
+            "> ⚠️ **本次会话未运行讨论阶段。**\n"
+            "> 下文全部结论来自各专家的**独立调研**，彼此之间未经反驳检验，\n"
+            "> 也**没有产生分歧台账**。请把「候选方案对比」一节理解为"
+            "「各人独立给出的主张」，而非辩论后的裁决。\n"
+        )
+    if ledger is None or not ledger.items:
+        return (
+            "> ⚠️ **本次讨论没有产生任何实质分歧。**\n"
+            "> 这通常意味着人设构造过于同质，或者这个问题的约束强到只剩一条路可走。\n"
+            "> 无论哪种，**本文件的结论都未经对抗性检验**，可信度存疑 ——\n"
+            "> 建议换一个更具体的输入重跑，或用 `--panel-size` 增加人数后重试。\n"
+        )
+    return ""
+
+
+def _footer_note(session: Session) -> str:
+    if not session.rounds:
+        return (
+            "*本文档由 Sparky 根据多专家独立调研自动生成；"
+            "未经交锋检验的结论已在文中逐处标注。*"
+        )
     return (
-        "> ⚠️ **本次会话未运行讨论阶段。**\n"
-        "> 下文全部结论来自各专家的**独立调研**，彼此之间未经反驳检验，\n"
-        "> 也**没有产生分歧台账**。请把「候选方案对比」一节理解为"
-        "「各人独立给出的主张」，而非辩论后的裁决。\n"
+        "*本文档由 Sparky 经多专家独立调研 + 多轮交锋后自动生成；"
+        "未达成一致的议题已如实列入第 8 节，未在别处被隐藏或美化。*"
     )
 
 
@@ -520,8 +717,7 @@ def _assemble(
     footer = [
         "---",
         "",
-        "*本文档由 Sparky 根据多专家独立调研自动生成；"
-        "未经交锋检验的结论已在文中逐处标注。*",
+        _footer_note(session),
         "",
         appendices,
     ]
@@ -565,8 +761,11 @@ def validate_document(
         chars = char_count(body)
         if chars == 0:
             problems.append("第 0 节摘要为空")
-        elif chars > MAX_SUMMARY_CHARS:
-            problems.append(f"第 0 节摘要 {chars} 字，超过上限 {MAX_SUMMARY_CHARS} 字")
+        elif chars > SUMMARY_HARD_CAP:
+            problems.append(
+                f"第 0 节摘要 {chars} 字，超过硬上限 {SUMMARY_HARD_CAP} 字"
+                f"（目标 {MAX_SUMMARY_CHARS} 字）"
+            )
 
     # 2/3. 候选方案数 ≥ 2，且至少 1 个被否决
     candidates = section(HEADINGS["candidates"])
@@ -693,5 +892,7 @@ __all__ = [
     "SECTION_INPUTS",
     "SECTION_THINKING",
     "MAX_SUMMARY_CHARS",
+    "SUMMARY_HARD_CAP",
+    "SUMMARY_REWRITE_TARGET",
     "SUMMARY_ATTEMPTS",
 ]

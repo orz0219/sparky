@@ -38,7 +38,15 @@ import traceback
 from collections.abc import Sequence
 
 from . import brief as brief_stage
-from . import cli, events, personas as personas_stage, recon as recon_stage, synthesis
+from . import (
+    cli,
+    consensus,
+    debate as debate_stage,
+    events,
+    personas as personas_stage,
+    recon as recon_stage,
+    synthesis,
+)
 from .config import load_runtime_config, mask_secret
 from .errors import EXIT_OK, EXIT_RUNTIME, SparkyError
 from .events import EventBus
@@ -98,23 +106,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"（名单会写进附录 A）"
             )
 
-        # ── S3 / S4 尚未实现（M2）。此处如实传给定稿阶段，
-        #    由它在文档里插入「未经交锋检验」的横幅。
-        tradeoff_count = 0
-        stalemate_count = 0
+        # ── S3 交锋 + S4 收敛 ──
+        renderer.note(
+            f"S3 交锋：第 1 轮全员立场陈述（{len(panel.personas)} 人并发）…"
+        )
+        result = debate_stage.run(client, runtime, session, brief, panel, outcome)
+
+        # 「零分歧」是失败信号而不是顺利信号，必须显式暴露 ——
+        # 否则用户会以为"大家一致同意"，而真相是"根本没辩起来"。
+        if consensus.is_harmonious(result.ledger, result):
+            session.warn(
+                "harmonious_session",
+                f"{result.round_count} 轮讨论下来一项分歧都没有产生。"
+                f"这通常意味着人设过于同质，或问题约束强到只剩一条路 —— "
+                f"文档顶部会插入告警横幅。",
+            )
+        else:
+            renderer.note(f"S4 收敛：{consensus.describe(result.ledger)}")
 
         # ── S5 定稿 ──
         renderer.note("S5 定稿：正在装配设计文档并做合规校验…")
-        path = synthesis.run(
-            client,
-            runtime,
-            session,
-            brief,
-            panel,
-            outcome,
-            tradeoff_count=tradeoff_count,
-            stalemate_count=stalemate_count,
-        )
+        path = synthesis.run(client, runtime, session, brief, panel, outcome)
 
         session.set_status("completed")
         session.emit(

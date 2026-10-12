@@ -1,0 +1,79 @@
+{
+  "persona_id": "p1",
+  "core_claim": "在 8GB 内存、完全断网的笔记本上，这个工具必须做到目标机 3 步内跑通第一集；权重不能随包分发时也只有 4 步，且用户到手总量必须压在 1GB 以内，默认用 int8 量化，绝不留云端回退路径。",
+  "pros": [
+    "步骤可验收：目标机 3 步 = 解压离线包、把权重目录放到 models/、运行 CLI 或 GUI 选音频；权重单独拷贝时多一步 USB 拷贝，共 4 步。每一步都能写成安装脚本自检，失败直接报缺哪个文件。",
+    "体积可验收：运行时 + ffmpeg 静态 + VAD + CLI/GUI 约 120–200MB；small int8 权重约 250MB，medium int8 约 800MB；到手总计约 400MB–1GB。这个量级可以用一个 U 盘一次拷完，不依赖任何下载。",
+    "8GB 内存有执行路径：whisper.cpp/ggml int8 + mmap 让权重不全部常驻内存，音频按 30–60 秒窗口分块，峰值可以压在 6GB 以内；章节切分复用同一套 token 时间戳，不额外加载大模型。",
+    "输出可落地：同一套对齐结果同时输出 JSON、SRT、Markdown 和章节标签，章节边界与文字稿时间戳不会互相漂移。",
+    "依赖冻结：二进制 + 静态 ffmpeg + 量化权重，不引入 conda/pip 首次联网解析，断网可运行率接近 100%（前提是文件校验通过）。"
+  ],
+  "cons": [
+    "准确率代价真实存在：int8 small/medium 对中文人名、术语、口音、重叠说话明显弱于云端大模型；我预计字错率差距在 5–15 个百分点，专有名词可能需要人工校对。",
+    "8GB 内存下 medium/large 有 OOM 风险；长播客必须分块，分块边界会切坏词，需要重叠窗口，转写耗时增加 10–20%。",
+    "权重单独分发引入版本漂移：用户可能拷错模型、SHA256 校验失败、路径写错，支持成本从‘装完即用’变成‘排障’。",
+    "无 GPU 时 CPU 转写慢：1 小时中文播客可能 10–60 分钟，长节目批量处理不可接受。",
+    "轻量章节切分不如大模型：VAD 静音 + 文本相似度对话题渐变、插播广告的边界会切错，需要用户手动调整。",
+    "砍掉说话人分离：默认不区分主播/嘉宾；若加入 pyannote 等方案，体积和内存都会爆，8GB 机器直接出局。"
+  ],
+  "reasoning": "本次无外部检索，所有体积与耗时均为既有知识估算，未实测。我的立场来自硬约束：断网 + 8GB 内存 + 不能留云端回退。可执行路线是 whisper.cpp/ggml int8 + 静态 ffmpeg + VAD/文本相似度切章。默认 small int8；medium int8 是上限。权重必须可校验、可单独拷贝。步骤数按目标机手动操作计：3 步；权重单独拷贝 4 步。分发包两个：程序 120–200MB，权重 small 约 250MB / medium 约 800MB，总计 400MB–1GB。",
+  "evidence": [
+    {
+      "claim": "目标机完全断网时，最少手动步骤为 3 步：解压离线包、放置权重、运行并选择音频；权重单独拷贝则第 4 步是 USB 拷贝。",
+      "source_url": null,
+      "confidence": "medium",
+      "unverified": true
+    },
+    {
+      "claim": "离线运行时包（二进制、静态 ffmpeg、VAD、CLI/GUI）约 120–200MB。",
+      "source_url": null,
+      "confidence": "low",
+      "unverified": true
+    },
+    {
+      "claim": "Whisper small int8 权重约 250MB，medium int8 约 800MB，large-v3 int8 约 1.5–3GB。",
+      "source_url": null,
+      "confidence": "low",
+      "unverified": true
+    },
+    {
+      "claim": "权重单独拷贝时，用户到手总量约 400MB–1GB（small/medium），large 方案约 2–3GB。",
+      "source_url": null,
+      "confidence": "low",
+      "unverified": true
+    },
+    {
+      "claim": "8GB 内存笔记本可用 whisper.cpp/ggml int8 + mmap + 分块把峰值内存压在 6GB 以内，跑 small/medium。",
+      "source_url": null,
+      "confidence": "medium",
+      "unverified": true
+    },
+    {
+      "claim": "无 GPU 时 CPU 转写 1 小时中文播客约 10–60 分钟。",
+      "source_url": null,
+      "confidence": "low",
+      "unverified": true
+    },
+    {
+      "claim": "int8 small/medium 相对云端大模型的中文字错率差距约 5–15 个百分点。",
+      "source_url": null,
+      "confidence": "low",
+      "unverified": true
+    },
+    {
+      "claim": "章节切分用 VAD 静音 + 文本相似度不需要额外大模型，额外体积小于 50MB。",
+      "source_url": null,
+      "confidence": "medium",
+      "unverified": true
+    },
+    {
+      "claim": "加入说话人分离会额外增加 1GB 以上权重和 torch 依赖，8GB 机器不适合默认启用。",
+      "source_url": null,
+      "confidence": "medium",
+      "unverified": true
+    }
+  ],
+  "would_concede_if": "如果实测在 8GB 断网笔记本上，medium int8 转写 2 小时中文播客峰值内存低于 7GB、字错率相对云端 large 差距小于 3 个百分点、1 小时音频 CPU 转写低于 15 分钟，我就把默认模型升到 medium 并接受分发包到 1.5GB。若 VAD + 文本相似度切章与人工标注边界一致率超过 90%，我可以放弃用本地小模型做话题切分的路线。",
+  "searched": false,
+  "search_note": "本次未使用外部检索，全部结论基于模型的既有知识推演。"
+}

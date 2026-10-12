@@ -152,10 +152,19 @@ class TerminalRenderer:
             + f"（其中推理 {usage.get('reasoning_tokens', 0)}）"
         )
 
-    # M2 才会发出的事件。渲染分支先留齐，接上 S3 时不用再改这个文件。
+    # ── S3 交锋 / S4 收敛 ──
+
     def _on_round_start(self, data: dict[str, Any]) -> None:
         self.blank()
-        self._write(self._paint(f"[交锋] 第 {data['round']} 轮", "36"))
+        mode = data.get("mode", "focus")
+        label = "全员立场陈述" if mode == "opening" else "定向加轮"
+        self._write(self._paint(f"[交锋] 第 {data['round']} 轮 · {label}", "36"))
+        if mode != "opening":
+            topics = data.get("topics") or {}
+            for disagreement_id in data.get("focus", []):
+                self._write(f"  · 聚焦 {disagreement_id}：{topics.get(disagreement_id, '')}")
+        participants = data.get("participants") or []
+        self._write(f"  发言者：{'、'.join(participants)}")
 
     def _on_turn_start(self, data: dict[str, Any]) -> None:
         return
@@ -165,22 +174,58 @@ class TerminalRenderer:
 
     def _on_turn_end(self, data: dict[str, Any]) -> None:
         turn = data["turn"]
+        if turn.get("abstained"):
+            reason = turn.get("abstain_reason") or "无发言"
+            self._write(self._paint(f"  ○ {turn['persona_id']} 弃权（{reason}）", "33"))
+            return
         self._write(f"  {turn['persona_id']}：{turn.get('summary', '')}")
 
     def _on_round_end(self, data: dict[str, Any]) -> None:
-        self._write(f"  第 {data['round']} 轮结束：未决分歧 {data.get('open_count', 0)} 项")
+        digest = data.get("digest") or {}
+        self._write(
+            f"  第 {data['round']} 轮结束 · 分歧 {digest.get('total', 0)} 项"
+            f"（已解决 {digest.get('resolved', 0)}、取舍 {digest.get('tradeoff', 0)}、"
+            f"未决 {digest.get('open', 0) + digest.get('stalemate', 0)}）"
+        )
 
     def _on_disagreement_open(self, data: dict[str, Any]) -> None:
-        self._write(f"  ⚡ 新分歧 {data['id']}：{data['topic']}")
+        parties = "、".join(data.get("parties") or [])
+        self._write(
+            self._paint(f"  ⚡ {data['id']}", "35") + f" {data['topic']}（{parties}）"
+        )
 
     def _on_disagreement_update(self, data: dict[str, Any]) -> None:
-        return
+        patch = data.get("patch") or {}
+        if patch.get("status") == "stalemate":
+            self._write(
+                self._paint(f"  ⊘ {data['id']} 记为僵局：{data.get('topic', '')}", "33")
+            )
 
     def _on_disagreement_close(self, data: dict[str, Any]) -> None:
-        self._write(f"  ✓ 分歧 {data['id']} → {data['status']}")
+        status = data.get("status", "")
+        if status == "resolved":
+            resolution = data.get("resolution") or {}
+            how = "被说服" if resolution.get("kind") == "convinced" else "让步"
+            self._write(
+                self._paint(f"  ✓ {data['id']} 已解决", "32")
+                + f"（{resolution.get('by')} {how}）"
+            )
+        elif status == "tradeoff":
+            tradeoff = data.get("tradeoff") or {}
+            self._write(
+                self._paint(f"  ⇄ {data['id']} 降级为取舍", "36")
+                + f"：选「{tradeoff.get('choose', '')}」"
+            )
 
     def _on_convergence_decision(self, data: dict[str, Any]) -> None:
-        self._write(f"  [收敛] {data['decision']}：{data.get('reason', '')}")
+        kind = data.get("decision", "")
+        if kind == "another_round":
+            label = self._paint("[收敛] 继续讨论 → ", "36")
+        elif kind == "done":
+            label = self._paint("[收敛] 达成 → ", "32")
+        else:
+            label = self._paint("[收敛] 收口（未完全收敛）→ ", "33")
+        self._write(f"  {label}{data.get('detail') or data.get('reason', '')}")
 
     # ───────────────────── 底层写入 ─────────────────────
 

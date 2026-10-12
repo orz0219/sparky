@@ -239,5 +239,41 @@ class TestSessionPersistence(unittest.TestCase):
                 Session.create(out_root, "同一个输入", bus=EventBus(), config_snapshot={})
 
 
+class TestAbstentionSemantics(unittest.TestCase):
+    """弃权 = **什么都没说**。
+
+    判据只看 ``responds_to`` 与 ``opens`` 会把第 1 轮里"正常陈述了立场、
+    只是没发现冲突"的人判成弃权 —— 而提示词恰恰鼓励"没冲突就别硬造"。
+    那等于惩罚诚实行为，还会把他计入连续弃权、移出后续讨论。
+    """
+
+    def _turn(self, **kwargs):
+        from .support import make_turn
+
+        return make_turn("p1", **kwargs)
+
+    def test_empty_turn_is_abstention(self):
+        self.assertTrue(self._turn().abstained)
+
+    def test_stating_a_position_is_not_abstention(self):
+        self.assertFalse(self._turn(new_points=["我的核心主张"]).abstained)
+
+    def test_opening_a_disagreement_is_not_abstention(self):
+        from .support import make_open
+
+        self.assertFalse(self._turn(opens=[make_open()]).abstained)
+
+    def test_replying_is_not_abstention(self):
+        from .support import make_reply
+
+        self.assertFalse(self._turn(responds_to=[make_reply()]).abstained)
+
+    def test_failed_turn_keeps_reason(self):
+        turn = self._turn(abstain_reason="发言失败：超时")
+        self.assertTrue(turn.abstained)
+        self.assertIn("超时", turn.abstain_reason or "")
+        self.assertIn("弃权", turn.summary())
+
+
 if __name__ == "__main__":
     unittest.main()

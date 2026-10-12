@@ -120,9 +120,13 @@ class Session:
     brief: Brief | None = None
     panel: Panel | None = None
     recon: ReconOutcome | None = None
-    #: 讨论轮次。M1 不跑 S3，因此恒为空 —— 定稿阶段据此判断是否要插入
+    #: 讨论轮次（每轮是一个 Turn 列表）。定稿阶段据此判断是否要插入
     #: 「本次未经交锋检验」的告警横幅。
     rounds: list[Any] = field(default_factory=list)
+    #: S3 产出的分歧台账 —— 定稿阶段的 §5 取舍台账与 §8 未决问题的唯一来源。
+    ledger: Any | None = None
+    #: S3 的完整结果（台账 + 逐轮发言 + 最终判定）
+    debate: Any | None = None
     usage: Usage = field(default_factory=Usage)
     doc_path: Path | None = None
     warnings: list[str] = field(default_factory=list)

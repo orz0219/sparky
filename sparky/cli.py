@@ -44,6 +44,13 @@ EPILOG = """\
   python3 -m sparky "我想做一个给播客自动生成章节和文字稿的小工具，本地跑，不要云服务"
   python3 -m sparky "一个本地优先的记账工具" --panel-size 3 --max-rounds 2
   python3 -m sparky "给团队做一个内部知识库" --context-dir ./notes --concurrency 6
+  python3 -m sparky "一个命令行番茄钟" --budget-tokens 200000
+
+讨论是怎么进行的：
+  第 1 轮全员各自陈述立场，并主动指出与他人的冲突。
+  之后每一轮都只召集**未决分歧的当事双方**（定向加轮），而不是让全员再发一轮。
+  收敛判定由规则完成，不问模型「你们达成一致了吗」——
+  详见 docs/consensus.md。
 
 密钥：
   从环境变量读取（默认 DEEPSEEK_API_KEY），真值建议集中放在
@@ -119,6 +126,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="同阶段并发度，默认 4",
     )
 
+    group_debate = parser.add_argument_group("讨论与收敛")
+    group_debate.add_argument(
+        "--max-rounds",
+        type=int,
+        default=4,
+        help=(
+            "讨论轮数硬上限，默认 4。第 1 轮是全员立场陈述，"
+            "之后每轮只召集未决分歧的当事双方（定向加轮）"
+        ),
+    )
+    group_debate.add_argument(
+        "--budget-tokens",
+        type=int,
+        default=None,
+        help="全会话 token 硬上限；不设则不按预算停止",
+    )
+
     group_run = parser.add_argument_group("运行")
     group_run.add_argument(
         "--context-dir",
@@ -133,9 +157,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="会话根目录，默认 ./.sparky/sessions",
     )
     group_run.add_argument("--quiet", action="store_true", help="只输出最终结果与错误")
-
-    # M1 尚未实现的开关刻意不暴露，避免用户以为是自己用错了
-    parser.add_argument("--max-rounds", type=int, default=4, help=argparse.SUPPRESS)
     return parser
 
 
@@ -147,6 +168,13 @@ def parse_args(argv: Sequence[str] | None = None) -> Config:
         parser.error(f"--panel-size 必须在 3–7 之间，实际是 {args.panel_size}")
     if args.concurrency < 1:
         parser.error(f"--concurrency 必须 ≥ 1，实际是 {args.concurrency}")
+    if args.max_rounds < 1:
+        parser.error(
+            f"--max-rounds 必须 ≥ 1，实际是 {args.max_rounds}。"
+            f"第 1 轮是全员立场陈述，设 0 等于不讨论"
+        )
+    if args.budget_tokens is not None and args.budget_tokens < 1000:
+        parser.error(f"--budget-tokens 必须 ≥ 1000，实际是 {args.budget_tokens}")
     if not args.idea.strip():
         parser.error("想法不能为空")
 
@@ -159,6 +187,7 @@ def parse_args(argv: Sequence[str] | None = None) -> Config:
         model_fast=args.model_fast,
         panel_size=args.panel_size,
         max_rounds=args.max_rounds,
+        budget_tokens=args.budget_tokens,
         concurrency=args.concurrency,
         context_dir=args.context_dir,
         out_root=args.out,

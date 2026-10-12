@@ -23,18 +23,20 @@ $ python3 -m sparky "我想做一个给播客自动生成章节和文字稿的�
 [定稿] .sparky/sessions/20261012-103000-podcast/design.md  ✍  约 6400 字
 ```
 
-> ## ⚙️ 当前状态：M1 已实现，M2 起待做
+> ## ⚙️ 当前状态：六个阶段全部打通（M1 + M2），M3 起待做
 >
-> `python3 -m sparky "..."` 现在能真的跑出文档了 —— 但**还没有讨论阶段**。
+> `python3 -m sparky "..."` 现在会真的组织多轮交锋、登记分歧台账，
+> 并据此写出取舍台账与未决问题。
 >
 > | 位置 | 状态 |
 > |---|---|
-> | [`docs/`](docs/) | ✅ 设计定稿，内容完整可引用 |
+> | [`docs/`](docs/) | ✅ 设计定稿 + 实现中修正的记录 |
 > | [`sparky/prompts/`](sparky/prompts/) | ✅ 提示词，**正在跑的**就是这些 |
 > | [`sparky/personas/presets/`](sparky/personas/presets/) | 📐 设计样例，尚未被代码读取 |
-> | S0 立案 / S1 组阁 / S2 调研 / S5 定稿 | ✅ 已实现，有单测 |
-> | S3 交锋 / S4 收敛 | ⛔ **未实现**（M2）—— 所以产出的文档会带「未经交锋检验」横幅 |
-> | [`sparky/web/`](sparky/web/) | ⛔ 未实现（M3） |
+> | S0 立案 / S1 组阁 / S2 调研 | ✅ 已实现 |
+> | S3 交锋 / S4 收敛 | ✅ 已实现（分歧台账 + 定向加轮 + 纯函数收敛判定） |
+> | S5 定稿 | ✅ 已实现，9 项合规校验 |
+> | 联网检索 / [`sparky/web/`](sparky/web/) / 断点续跑 | ⛔ 未实现（M3/M4） |
 >
 > 从 [docs/design.md](docs/design.md) 开始读，或直接看 [docs/roadmap.md](docs/roadmap.md)。
 
