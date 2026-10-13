@@ -1,17 +1,20 @@
-"""事件模型与内存总线。
+"""事件基础设施：事件模型、发布/订阅总线、扇出中心、插话队列。
 
 职责
-    定义全部事件类型，并提供发布/订阅总线。
-    这是编排层与表现层之间**唯一**的通信方式。
+    定义全部事件类型，并提供三层与事件有关的基础设施：
+      · ``EventBus``          —— 同步发布/订阅，编排层与表现层之间**唯一**的通信方式
+      · ``EventHub``          —— 把一个会话的事件扇出给 N 个 SSE 客户端，并留历史快照
+      · ``InterjectionQueue`` —— 委托人的插话队列（``client.interjection*`` 两个事件的载体）
 
 输入
-    ``Event`` 实例
+    ``Event`` 实例；``InterjectionQueue`` 额外收用户输入的文本
 
 输出
-    同步回调。订阅者可以有多个（终端渲染 + M3 的 SSE 服务）。
+    同步回调。订阅者可以有多个（终端渲染 + 网页）。
 
 依赖
-    仅标准库 ``dataclasses`` / ``json``。不依赖 ``llm`` / ``config`` 等基础层模块。
+    仅标准库 ``dataclasses`` / ``json`` / ``queue`` / ``threading``。
+    不依赖 ``llm`` / ``config`` / ``server`` 等其它模块。
 
 失败模式
     未知事件类型 → **抛 ``ValueError``**，不静默丢弃。
@@ -23,11 +26,19 @@
 设计要点
     SSE（M3）直接复用这套结构，不维护第二套协议 —— 见 docs/web-ui.md §2.1。
     事件**不得**携带密钥、base_url 或完整 prompt。
+
+    ``EventHub`` 与 ``InterjectionQueue`` 原本长在 ``server.py`` 里，
+    M3.2 挪到了这里。理由不是"整理文件"：网页工作台要能**同时**管理多个会话，
+    每个会话一套扇出与插话队列，而工作台属于编排层、
+    **不许 import ``server``**（docs/architecture.md §2 禁令 1）。
+    两者本来就不含任何 HTTP 概念 —— 挪进 ``events`` 让那条禁令保持绝对。
 """
 
 from __future__ import annotations
 
 import json
+import queue
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -70,7 +81,13 @@ CLIENT_INTERJECTION = "client.interjection"
 CLIENT_INTERJECTION_DELIVERED = "client.interjection.delivered"
 
 WARNING = "warning"
-ERROR = "error"
+#: 会话级失败。**刻意不叫 ``error``** ——
+#: SSE 的 ``event:`` 名与 ``EventSource`` 上的 DOM 事件同名同姓，
+#: 而 ``error`` 正是 EventSource 内建的连接失败事件。叫 ``error`` 时，
+#: 前端注册的 ``addEventListener("error", …)`` 会同时收到**两种**东西：
+#: 服务端发来的业务错误（带 data），和浏览器自己发的连接错误（不带 data）。
+#: 后者会让 ``JSON.parse(undefined)`` 抛异常，把真正的错误盖掉。
+ERROR = "session.error"
 
 #: 全部合法事件类型。发布未登记的类型即视为程序错误。
 KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
@@ -156,3 +173,97 @@ class EventBus:
     @property
     def subscriber_count(self) -> int:
         return len(self._subscribers)
+
+
+class InterjectionQueue:
+    """委托人的插话队列。
+
+    **收到即记，轮间送达。** 用户随时可以打字，但插话只在**轮与轮之间**
+    被送进提示词 —— 中途打断一轮会让并发中的几位专家看到不同的世界，
+    破坏"轮内只读上轮快照"这条不变量（见 docs/consensus.md §2.1）。
+    所以停止与插话的语义都是"**当前轮跑完再生效**"，不是"立刻掐断"。
+
+    线程安全：HTTP 处理线程写、讨论线程读。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: list[dict] = []
+        self._all: list[dict] = []
+
+    def add(self, text: str, *, received_round: int) -> dict:
+        record = {"text": text, "received_round": received_round, "delivered_round": None}
+        with self._lock:
+            self._pending.append(record)
+            self._all.append(record)
+        return record
+
+    def drain(self) -> list[dict]:
+        """取出待送达的插话并清空待送队列。"""
+        with self._lock:
+            drained, self._pending = self._pending, []
+        return drained
+
+    @property
+    def all(self) -> list[dict]:
+        with self._lock:
+            return list(self._all)
+
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+
+class EventHub:
+    """线程安全的扇出：每个 SSE 客户端一个队列，并保留一份历史快照。
+
+    它同时是 ``EventBus`` 的一个订阅者 —— 编排层只管发事件，
+    谁在听（终端渲染、网页）不关它的事。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._queues: list[queue.Queue[Event]] = []
+        #: 已广播过的**非临时**事件，供新连上来的页面补发。
+        self._history: list[Event] = []
+        self._closed = False
+
+    def publish(self, event: Event) -> None:
+        with self._lock:
+            if event.type not in EPHEMERAL_EVENT_TYPES:
+                self._history.append(event)
+            queues = list(self._queues)
+        # 在锁外投递：客户端队列满时不该阻塞事件发布
+        for target in queues:
+            target.put(event)
+
+    def subscribe(self) -> tuple[queue.Queue[Event], list[Event]]:
+        """订阅，返回 ``(实时队列, 历史快照)``。
+
+        两步在**同一个锁内**完成 —— 否则快照与实时流之间会漏掉事件。
+        """
+        with self._lock:
+            target: queue.Queue[Event] = queue.Queue()
+            self._queues.append(target)
+            return target, list(self._history)
+
+    def unsubscribe(self, target: queue.Queue[Event]) -> None:
+        with self._lock:
+            if target in self._queues:
+                self._queues.remove(target)
+
+    @property
+    def client_count(self) -> int:
+        with self._lock:
+            return len(self._queues)
+
+
+__all__ = [
+    "Event",
+    "EventBus",
+    "EventHub",
+    "InterjectionQueue",
+    "KNOWN_EVENT_TYPES",
+    "EPHEMERAL_EVENT_TYPES",
+]

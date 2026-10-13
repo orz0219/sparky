@@ -18,12 +18,11 @@
     **不提供 ``--api-key``**：密钥进 shell history 与 ``ps`` 输出是安全风险，
     用户只能通过环境变量提供。
 
-    M1 也**不提供** ``--web`` / ``--port`` / ``--resume``：
-    这些功能尚未实现（见 docs/roadmap.md）。暴露一个只会报错的开关
-    比不暴露更糟 —— 用户会以为是自己用错了。
+    ``--no-web`` 又不给想法 → 报错退出 2：既不起网页、又没有活可干，
+    启动它就是纯粹的等待。
 
 对应设计
-    docs/configuration.md §4
+    docs/configuration.md §4 · docs/web-ui.md §8 提案工作台
 """
 
 from __future__ import annotations
@@ -46,6 +45,11 @@ EPILOG = """\
   python3 -m sparky "给团队做一个内部知识库" --context-dir ./notes --concurrency 6
   python3 -m sparky "一个命令行番茄钟" --budget-tokens 200000
 
+不带想法时进入**提案工作台**：
+  python3 -m sparky
+  打开网页后可以看历史提案、看当前进行中的提案，也可以直接在页面上
+  新建一份提案。提案的清单就是 --out 目录（默认 ./.sparky/sessions）里的会话。
+
 讨论是怎么进行的：
   第 1 轮全员各自陈述立场，并主动指出与他人的冲突。
   之后每一轮都只召集**未决分歧的当事双方**（定向加轮），而不是让全员再发一轮。
@@ -65,7 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("idea", metavar="想法", help="一两句话描述你想做的东西")
+    parser.add_argument(
+        "idea",
+        metavar="想法",
+        nargs="?",
+        default="",
+        help="一两句话描述你想做的东西。不给就进入提案工作台，在网页上新建提案",
+    )
 
     group_llm = parser.add_argument_group("模型与供应商")
     group_llm.add_argument(
@@ -154,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         type=Path,
         default=Path(".sparky") / "sessions",
-        help="会话根目录，默认 ./.sparky/sessions",
+        help="会话根目录，默认 ./.sparky/sessions。提案工作台的清单就是它",
     )
     group_run.add_argument("--quiet", action="store_true", help="只输出最终结果与错误")
 
@@ -205,11 +215,17 @@ def parse_args(argv: Sequence[str] | None = None) -> Config:
         parser.error(f"--port 必须在 1–65535 之间，实际是 {args.port}")
     if args.budget_tokens is not None and args.budget_tokens < 1000:
         parser.error(f"--budget-tokens 必须 ≥ 1000，实际是 {args.budget_tokens}")
-    if not args.idea.strip():
-        parser.error("想法不能为空")
+
+    idea = args.idea.strip()
+    if not idea and not args.web:
+        parser.error(
+            "既没有给想法，又指定了 --no-web —— 那就无事可做。\n"
+            "  想跑一次讨论：python3 -m sparky \"你的想法\"\n"
+            "  想开提案工作台：python3 -m sparky（网页默认开启）"
+        )
 
     return Config(
-        raw_input=args.idea.strip(),
+        raw_input=idea,
         api_key_env=args.api_key_env,
         base_url=args.base_url,
         model=args.model,

@@ -60,7 +60,8 @@ html, body {
 }
 
 .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.logo { color: var(--accent); font-size: var(--fs-meta); }
+.logo { color: var(--accent); font-size: var(--fs-meta); text-decoration: none; }
+.logo:hover { color: var(--text); }
 .goal {
   font-size: var(--fs-lead);
   font-weight: 600;
@@ -110,6 +111,164 @@ html, body {
   color: var(--danger);
 }
 
+/* ─────────── 视图一：提案列表 ───────────
+   列表页回答的是三个问题，从上到下依次是：
+     1. 怎么发起一份新的（表单在最上，它是这个页面上唯一的"动作"）
+     2. 我之前发过什么（清单，最近的在最前）
+     3. 每份各是什么状况（状态徽章 + 一行事实：几人、几轮、几项分歧、多少字）
+   清单刻意用**卡片**而不是表格：这里的每一行是一件事，不是一个字段组合。 */
+
+.view-list {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 28px 80px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+.section-title .count { font-size: var(--fs-micro); font-weight: 400; color: var(--text-faint); }
+.section-title .ghost { margin-left: auto; }
+.section-hint {
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  line-height: 1.75;
+  margin: 0 0 14px;
+}
+
+.compose {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 22px;
+  margin-bottom: 44px;
+}
+.idea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  padding: 10px 12px;
+}
+.idea:focus { outline: none; border-color: var(--accent); }
+.idea::placeholder { color: var(--text-faint); }
+
+.advanced { margin-top: 12px; }
+.advanced summary {
+  cursor: pointer;
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+.advanced summary:hover { color: var(--text-dim); }
+.advanced-grid { display: flex; flex-wrap: wrap; gap: 22px; margin-top: 12px; }
+.advanced-grid label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+.advanced-grid input {
+  width: 88px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-meta);
+  padding: 5px 8px;
+}
+.advanced-grid input:focus { outline: none; border-color: var(--accent); }
+
+.compose-actions { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+.primary {
+  background: var(--accent);
+  color: #0d1017;
+  border: none;
+  border-radius: 8px;
+  font: inherit;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  padding: 9px 20px;
+  cursor: pointer;
+}
+.primary:disabled { background: var(--line); color: var(--text-faint); cursor: default; }
+.hint { font-size: var(--fs-micro); color: var(--text-faint); }
+
+.proposal-list { display: flex; flex-direction: column; gap: 10px; }
+.proposal {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.proposal:hover { background: var(--surface-2); border-color: var(--text-faint); }
+.proposal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.pstatus { font-size: var(--fs-micro); letter-spacing: 0.05em; color: var(--text-dim); }
+.ptime {
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.pgoal { font-size: var(--fs-body); line-height: 1.6; margin: 7px 0 8px; }
+.pmeta { font-size: var(--fs-meta); color: var(--text-dim); }
+.pdetail { font-size: var(--fs-micro); color: var(--warn); margin-top: 7px; }
+
+.proposal[data-status="running"] { border-left-color: var(--accent); }
+.proposal[data-status="running"] .pstatus { color: var(--accent); }
+.proposal[data-status="completed"] { border-left-color: var(--ok); }
+.proposal[data-status="completed"] .pstatus { color: var(--ok); }
+.proposal[data-status="interrupted"],
+.proposal[data-status="stale"] { border-left-color: var(--warn); }
+.proposal[data-status="interrupted"] .pstatus,
+.proposal[data-status="stale"] .pstatus { color: var(--warn); }
+.proposal[data-status="failed"],
+.proposal[data-status="broken"] { border-left-color: var(--danger); }
+.proposal[data-status="failed"] .pstatus,
+.proposal[data-status="broken"] .pstatus { color: var(--danger); }
+
+.empty { font-size: var(--fs-meta); color: var(--text-faint); }
+
+/* ─────────── 视图二：页签 ─────────── */
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 14px 28px 0;
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: var(--fs-meta);
+  padding: 6px 2px 9px;
+  cursor: pointer;
+}
+.tab:hover { color: var(--text-dim); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+#detail-status { margin-left: auto; font-size: var(--fs-micro); color: var(--text-faint); }
+
 /* ─────────── 布局 ─────────── */
 
 .layout {
@@ -139,6 +298,9 @@ html, body {
 .rail-count { font-weight: 400; margin-left: 6px; }
 
 .reading { min-width: 0; max-width: var(--reading-width); }
+/* 「设计文档」页签解除限宽：660px 是给**对话**定的（一行 44 字最舒服），
+   而设计文档里全是四五列的表格，挤在 660px 里每个格子只剩 150px。 */
+.reading.wide { max-width: none; }
 
 /* ─────────── 侧栏：进展 ─────────── */
 
@@ -458,3 +620,77 @@ html, body {
   color: var(--text-faint);
   min-width: 8em;
 }
+
+/* ─────────── 设计文档 ───────────
+   这里是**渲染好的 Markdown**（服务端渲染，见 sparky/markdown.py）。
+   排版目标只有一个：4 万字的文档要能被通读，而不是被扫一眼。
+   所以正文仍然限宽（900px），表格允许横向滚动 —— 表格是唯一
+   "内容宽度由列数决定、不该由阅读舒适度决定"的东西。 */
+
+#pane-doc { padding-bottom: 40px; }
+
+.doc {
+  max-width: 900px;
+  font-size: var(--fs-body);
+  line-height: 1.85;
+  overflow-x: auto;
+}
+.doc > *:first-child { margin-top: 0; }
+
+.doc h1, .doc h2, .doc h3, .doc h4, .doc h5, .doc h6 {
+  line-height: 1.4;
+  margin: 34px 0 12px;
+  font-weight: 600;
+}
+.doc h1 { font-size: 22px; margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.doc h2 { font-size: 18px; color: var(--accent); }
+.doc h3 { font-size: 16px; }
+.doc h4, .doc h5, .doc h6 { font-size: var(--fs-lead); color: var(--text-dim); }
+
+.doc p { margin: 0 0 16px; }
+.doc ul, .doc ol { margin: 0 0 16px; padding-left: 26px; }
+.doc li { margin-bottom: 6px; }
+.doc li > p { margin-bottom: 6px; }
+
+.doc blockquote {
+  margin: 0 0 16px;
+  padding-left: 14px;
+  border-left: 2px solid var(--line);
+  color: var(--text-dim);
+}
+
+.doc hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }
+
+.doc code {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+.doc pre {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0 0 18px;
+  overflow-x: auto;
+}
+.doc pre code { background: none; padding: 0; }
+
+.doc table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 640px;
+  margin: 0 0 20px;
+}
+.doc th, .doc td {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  font-size: var(--fs-meta);
+  line-height: 1.7;
+}
+.doc th { background: var(--surface); color: var(--text); font-weight: 600; }
+.doc strong { color: #fff; font-weight: 600; }

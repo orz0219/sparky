@@ -1,210 +1,117 @@
-"""进程入口：``python3 -m sparky "你的想法"`` 的落点。
+"""进程入口：``python3 -m sparky [想法]`` 的落点。
 
 职责
-    组装最外层调用链：解析参数 → 装载配置 → 建会话 → 跑流水线 → 收口，
-    并把失败翻译成明确的中文信息与退出码。
+    组装最外层调用链：解析参数 → 装载配置 → 起工作台 → （可选）立刻跑一次 →
+    收口，并把失败翻译成明确的中文信息与退出码。
+
+    **两种模式**：
+      · 给了想法 —— 起网页后立刻发起一份提案并等它跑完（与从前一致）
+      · 没给想法 —— 只起**提案工作台**：网页上能看历史提案、看进行中的提案、
+        新建提案。进程一直服务到 Ctrl-C。
 
 输入
     ``sys.argv``
 
 输出
     进程退出码：
-        0  正常结束（**包含未收敛的 force_stop**，那不是失败）
+        0  正常结束（**包含未收敛的 force_stop**，那不是失败；
+           也包含工作台模式下用户按 Ctrl-C 退出 —— 那是它正常的关闭方式）
         2  命令行参数错误
         3  配置错误（缺密钥等）
         4  会话持久化错误
         1  运行期错误（LLM 报错、校验不过等）
 
 依赖
-    ``cli`` · ``config`` · ``session`` · ``llm`` · ``render``
-    以及四个阶段模块 ``brief`` · ``personas`` · ``recon`` · ``synthesis``
+    ``cli`` · ``config`` · ``workspace`` · ``server`` · ``render``
 
 失败模式
     任何 ``SparkyError`` 都不许被吞掉 —— 必须打印明确的中文原因后
     以对应退出码退出。
-    键盘中断（Ctrl-C）：保留已落盘内容，把会话标记为 interrupted，
-    并以非零码退出。
+    **单次运行失败不会拖垮工作台**：错误写进 ``meta.json`` + transcript、
+    打到终端、记进运行句柄，进程继续服务。
+    键盘中断（Ctrl-C）：把仍在跑的提案标记为 interrupted，保留已落盘内容。
     未被 ``SparkyError`` 覆盖的异常视为 bug：打印完整回溯，退出码 1
     （不假装正常结束）。
 
+设计要点
+    网页服务**先于**会话启动。这与 M1 的顺序相反，是个改进：
+    从前是先建会话再起服务，端口冲突时会留下一个空会话目录再把它标成失败；
+    现在端口冲突根本不会建会话，用户拿到一条干净的配置错误。
+
 对应设计
-    docs/design.md §3.2 · docs/architecture.md §1 · §6
+    docs/design.md §3.2 · docs/architecture.md §1 · §6 · docs/web-ui.md §8
 """
 
 from __future__ import annotations
 
 import sys
+import time
 import traceback
 from collections.abc import Sequence
 
-from . import brief as brief_stage
-from . import (
-    cli,
-    consensus,
-    debate as debate_stage,
-    events,
-    personas as personas_stage,
-    recon as recon_stage,
-    server as server_stage,
-    synthesis,
-)
-from .config import load_runtime_config, mask_secret
+from . import cli, server as server_stage
+from .config import load_runtime_config
 from .errors import EXIT_OK, EXIT_RUNTIME, SparkyError
-from .events import EventBus
-from .llm import LlmClient
 from .render import TerminalRenderer
-from .session import Session
+from .workspace import Workspace
+
+#: 工作台模式下的空转周期（秒）。
+#:
+#: 刻意用 ``time.sleep`` 循环而不是 ``threading.Event.wait()``：
+#: 后者在部分平台上会一直阻塞到超时才响应 Ctrl-C，用户会觉得"按了没反应"。
+IDLE_TICK_SECONDS = 0.5
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """跑完一次头脑风暴会议。返回进程退出码。"""
+    """跑完一次头脑风暴会议，或开着提案工作台。返回进程退出码。"""
     renderer = TerminalRenderer()
-    session: Session | None = None
+    workspace: Workspace | None = None
     http_server = None
+    #: 工作台模式下 Ctrl-C 是正常的关闭方式，不该算失败。
+    interactive = False
 
     try:
         config = cli.parse_args(argv)
         runtime = load_runtime_config(config)
         renderer = TerminalRenderer(quiet=runtime.quiet)
-        renderer.note(
-            f"供应商 {runtime.base_url} · 模型 {runtime.model_strong}"
-            f" · 密钥 {mask_secret(runtime.api_key)}"
-        )
 
-        bus = EventBus()
-        bus.subscribe(renderer)
+        workspace = Workspace(runtime=runtime, renderer=renderer)
 
-        # 网页是事件总线的**另一个订阅者** —— 编排层完全不知道它在不在。
-        hub = server_stage.EventHub()
-        bus.subscribe(hub.publish)
-
-        # 会话先建、网页后起：这样端口冲突时能**如实把会话标记为失败**，
-        # 而不是留下一个状态永远停在 running 的空目录。
-        session = Session.create(
-            runtime.out_root,
-            runtime.raw_input,
-            bus=bus,
-            config_snapshot=_config_snapshot(runtime, config),
-        )
-
-        interjections = server_stage.InterjectionQueue()
-
-        def accept_interjection(text: str) -> bool:
-            """委托人插话：收到即记、即广播；**送达要等本轮结束**。
-
-            返回 False 表示当前不接受（会话已结束），HTTP 层会回 409 ——
-            不静默丢弃用户写的东西。
-            """
-            if session is None or session.doc_path is not None:
-                return False
-            # 队列与会话记录共享**同一个 dict 对象** —— debate 填
-            # delivered_round 时两处同步更新，不会分叉成两份真相。
-            record = interjections.add(text, received_round=session.current_round)
-            session.interjections.append(record)
-            session.emit(
-                events.CLIENT_INTERJECTION,
-                text=text,
-                received_round=session.current_round,
-            )
-            return True
-
+        url = f"http://127.0.0.1:{runtime.port}"
         if runtime.web:
             http_server, _thread = server_stage.start(
-                hub,
-                host="127.0.0.1",
-                port=runtime.port,
-                on_interject=accept_interjection,
+                workspace, host="127.0.0.1", port=runtime.port
             )
-            url = f"http://127.0.0.1:{runtime.port}"
             renderer.note(f"本地网页：{url}")
-            if runtime.open_browser and not server_stage.open_browser(url):
-                # 打不开浏览器不是致命错误：服务已经起来了，用户手敲地址即可。
-                # 但必须**说出来**，不能静默。
-                renderer.fail(f"⚠ 没能自动打开浏览器，请手动访问 {url}")
         else:
             renderer.note("（--no-web：只在终端输出）")
-        session.emit(
-            events.SESSION_START,
-            session_id=session.session_id,
-            raw_input=runtime.raw_input,
-            base_url=runtime.base_url,
-            model_strong=runtime.model_strong,
-            model_fast=runtime.model_fast,
-            concurrency=runtime.concurrency,
-        )
 
-        client = LlmClient(runtime, session)
+        if runtime.raw_input:
+            handle = workspace.start(runtime)
+            if runtime.web and runtime.open_browser:
+                _open_browser(renderer, f"{url}/#/p/{handle.session_id}")
+            handle.thread.join()  # type: ignore[union-attr]
+            return handle.exit_code
 
-        # ── S0 立案 ──
-        renderer.note("S0 立案：正在把你的描述拆成结构化立案书…")
-        brief = brief_stage.run(client, runtime, session)
-
-        # ── S1 组阁 ──
-        renderer.note("S1 组阁：正在决定开几个人、都是谁…")
-        panel = personas_stage.run(client, runtime, session, brief)
-
-        # ── S2 调研 ──
-        renderer.note(f"S2 调研：{len(panel.personas)} 条信息线并发取证…")
-        outcome = recon_stage.run(client, runtime, session, brief, panel)
-        if outcome.failures:
-            renderer.note(
-                f"{len(outcome.failures)} 位专家调研失败，将缺席定稿"
-                f"（名单会写进附录 A）"
-            )
-
-        # ── S3 交锋 + S4 收敛 ──
+        # ── 提案工作台：没有想法，只开着一个网页等你在上面发起提案 ──
+        interactive = True
+        if runtime.web and runtime.open_browser:
+            _open_browser(renderer, f"{url}/#/")
         renderer.note(
-            f"S3 交锋：第 1 轮全员立场陈述（{len(panel.personas)} 人并发）…"
+            f"提案工作台已就绪。提案清单来自 {workspace.out_root}"
+            f"（可用 --out 换）。在网页上新建提案，或按 Ctrl-C 退出。"
         )
-        result = debate_stage.run(
-            client,
-            runtime,
-            session,
-            brief,
-            panel,
-            outcome,
-            should_stop=server_stage.make_stop_check(http_server),
-            interjections=interjections if runtime.web else None,
-        )
-
-        # 「零分歧」是失败信号而不是顺利信号，必须显式暴露 ——
-        # 否则用户会以为"大家一致同意"，而真相是"根本没辩起来"。
-        if consensus.is_harmonious(result.ledger, result):
-            session.warn(
-                "harmonious_session",
-                f"{result.round_count} 轮讨论下来一项分歧都没有产生。"
-                f"这通常意味着人设过于同质，或问题约束强到只剩一条路 —— "
-                f"文档顶部会插入告警横幅。",
-            )
-        else:
-            renderer.note(f"S4 收敛：{consensus.describe(result.ledger)}")
-
-        # ── S5 定稿 ──
-        renderer.note("S5 定稿：正在装配设计文档并做合规校验…")
-        path = synthesis.run(client, runtime, session, brief, panel, outcome)
-
-        session.set_status("completed")
-        session.emit(
-            events.SESSION_END,
-            status="completed",
-            doc_path=str(path),
-            usage=session.usage.to_dict(),
-        )
-        renderer.blank()
-        if session.warnings:
-            renderer.note(f"本次有 {len(session.warnings)} 条告警，详见会话目录的 transcript.jsonl")
-        return EXIT_OK
+        while True:
+            time.sleep(IDLE_TICK_SECONDS)
 
     except KeyboardInterrupt:
-        _handle_interrupt(session, renderer)
-        return EXIT_RUNTIME
+        _handle_interrupt(workspace, renderer)
+        return EXIT_OK if interactive else EXIT_RUNTIME
     except SparkyError as exc:
-        _mark_failed(session, exc)
         renderer.fail("")
         renderer.fail(exc.render())
         return exc.exit_code
     except Exception:  # noqa: BLE001 —— 未预期的异常是 bug，必须带回溯暴露
-        _mark_failed(session, None)
         renderer.fail("")
         renderer.fail("错误：遇到未预期的内部异常（这是 bug，不是你的用法问题）")
         traceback.print_exc()
@@ -215,70 +122,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         server_stage.stop(http_server)
 
 
-def _config_snapshot(runtime, config) -> dict[str, object]:
-    """写进 meta.json 的配置快照。**不含密钥真值**。
-
-    字段名刻意避开 ``api_key*`` 前缀（用 ``key_hint`` / ``key_source``）：
-    ``session.redact()`` 会保守地把任何像密钥字段的名字擦成 ``<已擦除>``，
-    连"用的是哪个环境变量"这种非机密的诊断信息也会一起擦掉。
-    """
-    return {
-        "base_url": runtime.base_url,
-        "key_source": runtime.api_key_env,
-        "key_hint": mask_secret(runtime.api_key),
-        "model_strong": runtime.model_strong,
-        "model_fast": runtime.model_fast,
-        "panel_size": runtime.panel_size,
-        "max_rounds": runtime.max_rounds,
-        "concurrency": runtime.concurrency,
-        "context_dir": str(runtime.context_dir) if runtime.context_dir else None,
-        "max_tokens": runtime.max_tokens,
-        "temperature": runtime.temperature,
-        "timeout": runtime.timeout,
-    }
+def _open_browser(renderer: TerminalRenderer, url: str) -> None:
+    """打开浏览器。打不开不是致命错误，但**必须说出来**（不静默）。"""
+    if not server_stage.open_browser(url):
+        renderer.fail(f"⚠ 没能自动打开浏览器，请手动访问 {url}")
 
 
-def _mark_failed(session: Session | None, exc: SparkyError | None) -> None:
-    """把失败写进 meta.json 与 transcript。
-
-    写入本身也可能失败（磁盘满、目录被删）。此时**原始错误才是要报的**，
-    所以不再向上抛 —— 但也**绝不静默**：二次失败会打印到 stderr。
-    AGENTS.md 禁止 ``except: pass``，这条路径不例外。
-    """
-    if session is None:
-        return
-    try:
-        session.set_status(f"failed: {type(exc).__name__}" if exc else "failed: internal")
-        session.emit(
-            events.ERROR,
-            stage="pipeline",
-            message=exc.message if exc else "未预期的内部异常",
-            detail=repr(exc) if exc else "",
-        )
-    except Exception as secondary:  # noqa: BLE001
-        print(
-            f"警告：失败状态没能写进会话目录（{type(secondary).__name__}: {secondary}）。\n"
-            f"     {session.root} 可能不完整。上面那条才是原始错误。",
-            file=sys.stderr,
-        )
-
-
-def _handle_interrupt(session: Session | None, renderer: TerminalRenderer) -> None:
+def _handle_interrupt(workspace: Workspace | None, renderer: TerminalRenderer) -> None:
     """Ctrl-C：保住已落盘的内容，并告诉用户怎么找回它。"""
     renderer.blank()
-    if session is None:
-        renderer.fail("已中断（还没有建立会话，没有内容落盘）。")
+    if workspace is None:
+        renderer.fail("已中断（工作台还没建起来，没有内容落盘）。")
         return
     try:
-        session.set_status("interrupted")
-        session.emit(events.SESSION_END, status="interrupted", usage=session.usage.to_dict())
+        interrupted = workspace.interrupt_all()
     except Exception as secondary:  # noqa: BLE001
         renderer.fail(
             f"已中断；但状态写入失败（{type(secondary).__name__}: {secondary}）。"
-            f"{session.root} 可能不完整。"
+            f"{workspace.out_root} 下可能有状态不完整的会话。"
         )
         return
-    renderer.fail(f"已中断。已落盘内容保留在 {session.root}")
+    if not interrupted:
+        renderer.fail("已中断（当时没有正在跑的提案）。")
+        return
+    for session_id in interrupted:
+        renderer.fail(f"已中断：{session_id}（已落盘内容保留在 {workspace.out_root}）")
 
 
 if __name__ == "__main__":

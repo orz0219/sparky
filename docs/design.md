@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档状态 | 设计定稿（Design Frozen），尚未实现 |
+| 文档状态 | 设计定稿（Design Frozen）。**实现进度见 [roadmap.md](roadmap.md)** —— M0–M3.2 已完成，M4 待做 |
 | 版本 | v0.1 |
-| 最后更新 | 2026-10-12 |
+| 最后更新 | 2026-10-13 |
 | 读者 | 本项目的实现者、协作者，以及想理解「多智能体头脑风暴怎么才不变成自说自话」的人 |
 | 分册 | [architecture](architecture.md) · [personas](personas.md) · [consensus](consensus.md) · [output-spec](output-spec.md) · [web-ui](web-ui.md) · [configuration](configuration.md) · [roadmap](roadmap.md) |
 
@@ -470,10 +470,17 @@ open ──→ resolved     （一方被说服，记录理由）
 见 [web-ui.md](web-ui.md)。要点：
 
 - 单个 HTML + CSS + JS，**零构建**，由 `server.py` 用标准库 `http.server` 提供。
-- 数据通道：`GET /events`（SSE）。事件协议见 [web-ui.md](web-ui.md) §2。
-- 界面四块：**人设卡区**（谁在开会）、**对话气泡流**（实时讨论）、
-  **分歧台账面板**（当前哪些还没谈拢）、**轮次时间线**。
+- 数据通道：`GET /events?session=<提案 id>`（SSE）。事件协议见 [web-ui.md](web-ui.md) §2。
+- **两个视图**（M3.2）：`#/` 是**提案列表**（新建表单 + 历史与进行中的提案），
+  `#/p/<id>` 是**提案详情**（讨论流 + 设计文档两个页签）。
+- 详情页四块：**人设卡区**（谁在开会）、**讨论流**（实时或重放）、
+  **分歧台账**（当前哪些还没谈拢）、**进展时间线**。
 - 不加 `--web` 则完全不启动服务器，直接往终端打文本时间线。
+
+**一份「提案」就是一个会话目录**，不另造数据结构。看历史提案靠
+**重放 `transcript.jsonl`**，不重新调模型 —— 重放出来的事件序列与实时讨论
+完全同形，所以前端一行都不用改。决策与代价见
+[ADR 0005](adr/0005-proposal-workspace.md)。
 
 ---
 

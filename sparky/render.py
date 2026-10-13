@@ -149,7 +149,7 @@ class TerminalRenderer:
     def _on_warning(self, data: dict[str, Any]) -> None:
         self._write(self._paint(f"  ⚠ [{data['code']}] {data['message']}", "33"))
 
-    def _on_error(self, data: dict[str, Any]) -> None:
+    def _on_session_error(self, data: dict[str, Any]) -> None:
         self.fail(f"  ✗ [{data['stage']}] {data['message']}")
 
     def _on_session_end(self, data: dict[str, Any]) -> None:

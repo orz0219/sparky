@@ -18,8 +18,11 @@ python3 tools/demo_server.py            # 起服务并打开浏览器
 python3 tools/demo_server.py --port 9000 --no-browser
 ```
 
-它注入一段**写死的合成事件序列**，覆盖全部四块区域，结果完全可复现。
-`tests/test_server.py::TestDemoFixture` 会核对它与事件协议没有脱节。
+它注入一段**写死的合成事件序列**，并伪装成一个提案工作台 ——
+清单里同时有「进行中 / 已完成 / 未跑完」三种提案，所以列表、详情、
+设计文档、以及"连接结束了但讨论没收口"这条路径都能看到，结果完全可复现。
+`tests/test_server.py::TestDemoFixture` 会核对它与事件协议没有脱节，
+也会核对它实现的是真的 `ProposalApi` 那套接口。
 
 它**不是产品的一部分** —— 只是给改前端的人省时间。
 

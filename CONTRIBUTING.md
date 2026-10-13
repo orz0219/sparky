@@ -1,13 +1,16 @@
 # 贡献指南
 
-先说最重要的一句：**当前仓库处于「设计定稿、尚未实现」阶段。**
-在开始写代码之前，请先读 [AGENTS.md](AGENTS.md) 与 [docs/design.md](docs/design.md)。
+先说最重要的一句：**M0–M3.2 已实现，M4（检索 / 续跑 / 单文件打包）待做。**
+设计文档仍然是权威 —— 在动手之前请先读 [AGENTS.md](AGENTS.md) 与
+[docs/design.md](docs/design.md)，尤其是 [docs/architecture.md](docs/architecture.md)
+§2 那四条分层禁令与 [docs/consensus.md](docs/consensus.md)。
 
 ---
 
 ## 提交之前请先开 Issue
 
-因为项目还处于设计阶段，**架构层面的改动必须先讨论**。
+**架构层面的改动必须先讨论** —— 它往往意味着要新增一篇 ADR
+（见 [docs/adr/README.md](docs/adr/README.md)）。
 直接提一个大 PR 大概率会被要求改写，对双方都是浪费。
 
 值得先开 Issue 的类型：

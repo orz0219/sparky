@@ -36,3 +36,4 @@
 | [0002](0002-persona-generation-over-fixed-cast.md) | 人设按维度现场生成，而非从固定角色池挑选 | 已接受 |
 | [0003](0003-consensus-as-explicit-ledger.md) | 共识 = 显式分歧台账，而非 LLM 自述一致 | 已接受 |
 | [0004](0004-information-scoping.md) | 信息面隔离：每个 Agent 看到不同的上下文 | 已接受 |
+| [0005](0005-proposal-workspace.md) | 网页是提案工作台：一个页面管多份提案，而不是一次运行的查看器 | 已接受 |

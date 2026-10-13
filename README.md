@@ -23,13 +23,22 @@ $ python3 -m sparky "我想做一个给播客自动生成章节和文字稿的�
 [定稿] .sparky/sessions/20261012-103000-podcast/design.md  ✍  约 6400 字
 ```
 
-> ## ⚙️ 当前状态：M1 + M2 + M3 已完成，M4 待做
+> ## ⚙️ 当前状态：M1 + M2 + M3 + M3.1 + M3.2 已完成，M4 待做
 >
-> `python3 -m sparky "..."` 会打开一个本地网页，你能**实时看着专家们吵** ——
-> 逐字出现、分歧进台账、谈不拢的如实标为未决。跑完给一份设计文档。
+> 网页是一个**提案工作台**，不是一次运行的查看器：
 >
-> **你随时可以插话**（底部输入框）。意见会在本轮结束时送达专家 ——
-> 不打断正在进行的辩论，但一定会被读到，并写进文档附录 C。
+> ```console
+> $ python3 -m sparky "你的想法"     # 起网页 + 立刻跑这一份
+> $ python3 -m sparky                # 只起工作台，在页面上看历史 / 新建提案
+> ```
+>
+> | 你想干什么 | 在页面上怎么做 |
+> |---|---|
+> | 看我**历史**的提案 | 列表里每份都写着状态、几人、几轮、几项分歧、文档多少字；点开就重放整场讨论 |
+> | 看我**当前**的提案 | 进行中的那份带「● 进行中」徽章，点进去逐字看着专家吵 |
+> | **新建**一份提案 | 页面最上面写一句话，点「发起提案」 |
+> | 看最终设计文档 | 详情页的「设计文档」页签，渲染好的 |
+> | 插话 | 底部输入框。意见在本轮结束时送达专家 —— 不打断辩论，但一定被读到，并写进附录 C |
 >
 > | 位置 | 状态 |
 > |---|---|
@@ -37,13 +46,13 @@ $ python3 -m sparky "我想做一个给播客自动生成章节和文字稿的�
 > | [`sparky/prompts/`](sparky/prompts/) | ✅ 提示词，**正在跑的**就是这些 |
 > | [`sparky/personas/presets/`](sparky/personas/presets/) | 📐 设计样例，尚未被代码读取 |
 > | S0–S5 六个阶段 | ✅ 全部已实现 |
-> | 本地网页（SSE 实时呈现） | ✅ 已实现（780 行、零构建、零外链） |
+> | 提案工作台（列表 / 新建 / 历史重放 / 文档渲染） | ✅ 已实现（前端约 1800 行、零构建、零外链） |
 > | 联网检索 / 断点续跑 / 单文件打包 | ⛔ 未实现（M4） |
 >
 > 从 [docs/design.md](docs/design.md) 开始读，或直接看 [docs/roadmap.md](docs/roadmap.md)。
 >
 > **不想花 API 钱也想看界面？** `python3 tools/demo_server.py` ——
-> 用合成事件回放一场讨论，几秒钟就能看到完整的四块区域。
+> 用合成事件伪装成一个工作台（三种状态的提案都有），几秒钟就能看完整界面。
 
 ---
 
@@ -130,10 +139,14 @@ git clone https://github.com/orz0219/sparky.git && cd sparky
 # 密钥放这儿（也可以直接 export）
 echo 'DEEPSEEK_API_KEY=sk-...' >> ~/.config/llm/keys.env
 
+# 方式一：直接跑一次，网页会实时把讨论演给你看
 python3 -m sparky "你的想法，一两句话就行"
+
+# 方式二：只开提案工作台，在网页上翻历史、发起新的
+python3 -m sparky
 ```
 
-跑完之后看 `.sparky/sessions/<会话>/design.md`。
+跑完之后看 `.sparky/sessions/<会话>/design.md`，或者在页面上点开那份提案。
 
 终端输出长这样：
 
@@ -181,26 +194,30 @@ sparky/
 │   ├── output-spec.md         ← 定稿文档模板规范
 │   ├── web-ui.md              ← SSE 事件协议与前端设计
 │   ├── configuration.md       ← 配置、密钥、供应商接入
-│   ├── roadmap.md             ← 里程碑 M0–M3
+│   ├── roadmap.md             ← 里程碑 M0–M4
 │   ├── faq.md
 │   └── adr/                   ← 架构决策记录
 │
-├── sparky/                    ⛔ 实现（当前仅契约占位）
+├── sparky/                    ✅ 实现（零第三方依赖）
 │   ├── __main__.py            ← 入口：python3 -m sparky
 │   ├── cli.py                 ← 命令行参数
 │   ├── config.py              ← 配置与密钥装载
 │   ├── llm.py                 ← LLM 调用封装（OpenAI 兼容 + SSE）
-│   ├── events.py              ← 事件模型（会话总线）
+│   ├── events.py              ← 事件模型、总线、扇出中心、插话队列
 │   ├── session.py             ← 会话状态与事件溯源持久化
+│   ├── pipeline.py            ← S0→S5 的顺序与收口（命令行与网页共用）
+│   ├── workspace.py           ← 提案工作台：清单 / 详情 / 发起 / 停止 / 插话
 │   ├── brief.py               ← S0 立案
 │   ├── personas.py            ← S1 组阁
 │   ├── recon.py               ← S2 调研
 │   ├── debate.py              ← S3 交锋
 │   ├── consensus.py           ← S4 收敛
 │   ├── synthesis.py           ← S5 定稿
-│   ├── server.py              ← 本地 HTTP + SSE 服务
-│   ├── prompts/               ← 提示词（设计草案）
-│   ├── personas/presets/      ← 人设模板与维度库
+│   ├── server.py              ← 本地 HTTP + 提案 API + SSE
+│   ├── markdown.py            ← 设计文档的 Markdown → HTML
+│   ├── render.py              ← 终端渲染
+│   ├── prompts/               ← 提示词，**正在跑的**就是这些
+│   ├── personas/presets/      ← 人设模板与维度库（设计样例）
 │   └── web/                   ← 前端静态资源（零构建）
 │
 ├── tools/

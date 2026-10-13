@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sparky · 头脑风暴</title>
+<title>Sparky · 提案工作台</title>
 <!-- 零外链：没有 CDN、没有字体文件、没有图片。断网也能正常显示。 -->
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -11,12 +11,12 @@
 
 <header class="topbar">
   <div class="brand">
-    <span class="logo">◆</span>
-    <span id="goal" class="goal">等待立案…</span>
+    <a class="logo" href="#/" title="回到提案列表">◆</a>
+    <span id="goal" class="goal">提案工作台</span>
   </div>
   <div class="topbar-meta">
     <span id="round-badge" class="badge" hidden></span>
-    <span id="status" class="status">连接中…</span>
+    <span id="status" class="status"></span>
     <button id="toggle-all" class="ghost" type="button" hidden>展开全部</button>
     <button id="stop" class="ghost danger" type="button" hidden>停止</button>
   </div>
@@ -24,57 +24,116 @@
 
 <div id="banner" class="banner" hidden></div>
 
-<div class="layout">
+<!-- ───────────── 视图一：提案列表 ───────────── -->
+<main id="view-list" class="view view-list">
 
-  <!-- 侧栏：人类读一场评审时最先想知道的两件事 —— 进行到哪、在争什么 -->
-  <aside class="rail">
-    <section class="rail-block">
-      <h2 class="rail-title">进展</h2>
-      <ol id="stages" class="stages">
-        <li data-stage="0"><span class="mark">○</span>立案</li>
-        <li data-stage="1"><span class="mark">○</span>组阁</li>
-        <li data-stage="2"><span class="mark">○</span>调研</li>
-        <li data-stage="3"><span class="mark">○</span>交锋</li>
-        <li data-stage="4"><span class="mark">○</span>收敛</li>
-        <li data-stage="5"><span class="mark">○</span>定稿</li>
-      </ol>
-    </section>
+  <section class="compose">
+    <h2 class="section-title">新建提案</h2>
+    <p class="section-hint">
+      一句话说清你想做的东西。工具会自己判断该开几个人、都是谁，
+      然后组织多轮讨论，最后给你一份设计文档。
+    </p>
+    <form id="compose-form">
+      <textarea id="idea" class="idea" rows="3" required
+                placeholder="例如：我想做一个给播客自动生成章节和文字稿的小工具，本地跑，不要云服务"></textarea>
+      <details class="advanced">
+        <summary>高级选项（不填就自动）</summary>
+        <div class="advanced-grid">
+          <label>专家人数
+            <input id="panel-size" type="number" min="3" max="7" placeholder="自动">
+          </label>
+          <label>最多轮数
+            <input id="max-rounds" type="number" min="1" max="12" placeholder="4">
+          </label>
+        </div>
+      </details>
+      <div class="compose-actions">
+        <button id="create" class="primary" type="submit">发起提案</button>
+        <span id="compose-hint" class="hint"></span>
+      </div>
+    </form>
+  </section>
 
-    <section class="rail-block">
-      <h2 class="rail-title">议程<span id="ledger-count" class="rail-count"></span></h2>
-      <div id="ledger" class="ledger"></div>
-    </section>
+  <section class="proposals">
+    <h2 class="section-title">
+      提案<span id="proposal-count" class="count"></span>
+      <button id="refresh" class="ghost" type="button">刷新</button>
+    </h2>
+    <div id="proposal-list" class="proposal-list"></div>
+    <p id="proposal-empty" class="empty" hidden>
+      还没有提案。在上面写一句话，就能发起第一份。
+    </p>
+  </section>
+</main>
 
-    <!-- 插话在流里是"当时发生的事"，会被折叠；这里是一份**永不隐藏**的索引，
-         回答用户最关心的那个问题："我插的话到底进去没有？" -->
-    <section id="mine-block" class="rail-block" hidden>
-      <h2 class="rail-title">你的插话</h2>
-      <div id="mine" class="mine-list"></div>
-    </section>
-  </aside>
+<!-- ───────────── 视图二：提案详情 ───────────── -->
+<div id="view-detail" class="view" hidden>
 
-  <!-- 主区：按"会议纪要"排版 —— 分组、限宽、可折叠 -->
-  <main class="reading">
+  <nav class="tabs">
+    <button id="tab-meeting" class="tab" type="button">讨论</button>
+    <button id="tab-doc" class="tab" type="button">设计文档</button>
+    <span id="detail-status" class="status"></span>
+  </nav>
 
-    <section id="people-block" class="block" hidden>
-      <h2 class="block-title">参会</h2>
-      <div id="people" class="people"></div>
-    </section>
+  <div class="layout">
 
-    <section id="memos-block" class="block" hidden>
-      <button id="memos-toggle" class="disclosure" type="button" aria-expanded="false">
-        <span class="caret">▸</span><span>调研结论</span>
-        <span id="memos-count" class="block-hint"></span>
-      </button>
-      <div id="memos" class="memos" hidden></div>
-    </section>
+    <!-- 侧栏：人类读一场评审时最先想知道的两件事 —— 进行到哪、在争什么 -->
+    <aside class="rail">
+      <section class="rail-block">
+        <h2 class="rail-title">进展</h2>
+        <ol id="stages" class="stages">
+          <li data-stage="0"><span class="mark">○</span>立案</li>
+          <li data-stage="1"><span class="mark">○</span>组阁</li>
+          <li data-stage="2"><span class="mark">○</span>调研</li>
+          <li data-stage="3"><span class="mark">○</span>交锋</li>
+          <li data-stage="4"><span class="mark">○</span>收敛</li>
+          <li data-stage="5"><span class="mark">○</span>定稿</li>
+        </ol>
+      </section>
 
-    <div id="stream" class="stream"></div>
-  </main>
+      <section class="rail-block">
+        <h2 class="rail-title">议程<span id="ledger-count" class="rail-count"></span></h2>
+        <div id="ledger" class="ledger"></div>
+      </section>
+
+      <!-- 插话在流里是"当时发生的事"，会被折叠；这里是一份**永不隐藏**的索引，
+           回答用户最关心的那个问题："我插的话到底进去没有？" -->
+      <section id="mine-block" class="rail-block" hidden>
+        <h2 class="rail-title">你的插话</h2>
+        <div id="mine" class="mine-list"></div>
+      </section>
+    </aside>
+
+    <!-- 主区：按"会议纪要"排版 —— 分组、限宽、可折叠 -->
+    <main class="reading" id="reading">
+
+      <div id="pane-meeting">
+        <section id="people-block" class="block" hidden>
+          <h2 class="block-title">参会</h2>
+          <div id="people" class="people"></div>
+        </section>
+
+        <section id="memos-block" class="block" hidden>
+          <button id="memos-toggle" class="disclosure" type="button" aria-expanded="false">
+            <span class="caret">▸</span><span>调研结论</span>
+            <span id="memos-count" class="block-hint"></span>
+          </button>
+          <div id="memos" class="memos" hidden></div>
+        </section>
+
+        <div id="stream" class="stream"></div>
+      </div>
+
+      <div id="pane-doc" hidden>
+        <p id="doc-hint" class="hint"></p>
+        <article id="doc" class="doc"></article>
+      </div>
+    </main>
+  </div>
 </div>
 
 <!-- 插话：常驻底部。收到即记，**轮间送达** —— 见 docs/web-ui.md -->
-<footer class="composer">
+<footer class="composer" id="composer" hidden>
   <span class="composer-label">插话</span>
   <input id="say" class="composer-input" type="text" autocomplete="off"
          placeholder="你随时可以说，意见会在本轮结束时送达专家…">

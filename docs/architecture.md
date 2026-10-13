@@ -9,17 +9,17 @@
 
 每个模块的职责、输入、输出、失败模式 —— **失败模式不许留空**。
 
-标记 `M1` 的行是已经实现并有单测覆盖的；其余为设计定稿、待实现。
+标记了里程碑的行是**已经实现并有单测覆盖**的。目前只有 `tools/build_single_file.py` 还没实现（M4）。
 
 | 模块 | 职责 | 输入 | 输出 | 失败模式 |
 |---|---|---|---|---|
 | `errors.py` `M1` | 异常层次与退出码映射 | — | `SparkyError` 子类 | 无 IO，无失败模式 |
 | `models.py` `M1` | 全部数据模型 + **严格**的 dict→对象解析 | LLM 返回的 dict | dataclass 实例 | 缺字段 / 类型不符 → 抛 `SchemaError`，带字段路径与原始值。**绝不填充默认值** |
-| `__main__.py` `M1` | 进程入口，串起六阶段并翻译失败 | `sys.argv` | 退出码 | 参数非法 → 2；缺密钥 → 3；磁盘不可写 → 4；其余 → 1；未预期异常打印完整回溯 |
-| `cli.py` `M1` | 解析命令行、校验取值、组装 `Config` | `sys.argv` | `Config` | 未知参数 / 取值越界 → 报错退出 2。**不提供 `--api-key`** |
+| `__main__.py` `M1`+`M3.2` | 进程入口：**两种模式** —— 给了想法就跑一次并等它结束；没给就开着提案工作台到 Ctrl-C | `sys.argv` | 退出码 | 参数非法 → 2；缺密钥 → 3；磁盘不可写 → 4；其余 → 1；未预期异常打印完整回溯。**单次运行失败不拖垮工作台**：错误写进会话目录后进程继续服务 |
+| `cli.py` `M1`+`M3.2` | 解析命令行、校验取值、组装 `Config` | `sys.argv` | `Config` | 未知参数 / 取值越界 / `--no-web` 又不给想法 → 报错退出 2。**不提供 `--api-key`** |
 | `config.py` `M1` | 装载配置与密钥；`base_url` 校验；提示词与上下文材料装载 | `Config` + 环境变量 + `keys.env` + `.env` | `RuntimeConfig` + 渲染好的提示词 | **缺密钥 → 立即报错退出 3**，不进入任何阶段；密钥文件格式错误 → 报错不跳过坏行；提示词缺标记 / 占位符不匹配 → 报错 |
 | `llm.py` `M1`+`M3` | OpenAI 兼容调用：**非流式** `complete`/`complete_json` 与**流式** `stream_json`（含 SSE 分帧与 `SayExtractor` 增量抽取）；调用前落盘快照；重试；用量统计；截断与空正文检测 | messages + 模型参数 | `LlmReply`（正文 + usage） | 5xx/429/网络 → 重试 2 次后抛出；4xx → 立即抛出；响应非 JSON → 抛出；`finish_reason=length` 或正文为空 → 抛出（截断的 JSON 必然解析失败，不拿去解析） |
-| `events.py` `M1`+`M3` | 21 类事件定义 + 同步发布/订阅总线 + **临时事件分级**（`turn.token` 不落盘） | `Event` | 回调 | 未登记的事件类型 → 抛 `ValueError`（不静默丢弃）；订阅者异常向上传递（表现层出错必须被看见） |
+| `events.py` `M1`+`M3.2` | 事件基础设施：23 类事件定义 + 同步发布/订阅总线 + **扇出中心 `EventHub`** + **插话队列 `InterjectionQueue`** + 临时事件分级（`turn.token` 不落盘） | `Event` | 回调 | 未登记的事件类型 → 抛 `ValueError`（不静默丢弃）；订阅者异常向上传递（表现层出错必须被看见） |
 | `session.py` `M1` | 会话目录与 `meta.json`（**跑之前就建**）、事件溯源 JSONL、上下文快照、**并发锁** | `Event` + payload | 磁盘 JSONL/JSON + 内存状态 | 目录不可写 / JSONL 追加失败 → `PersistenceError` 退出 4；会话 id 撞名 → 报错不覆盖 |
 | `render.py` `M1` | 终端渲染：订阅事件，打中文进度时间线 | `Event` | stdout | 事件类型没有渲染分支 → 抛 `KeyError`（实现遗漏必须暴露） |
 | `brief.py` `M1` | **S0 立案**：口语 → 结构化 `Brief` | 用户输入 + 可选上下文 | `Brief` | LLM 输出非 JSON / 缺字段 → 报错；维度数不在 3–8 → 报错；维度 id 重复 → 报错 |
@@ -28,13 +28,17 @@
 | `synthesis.py` `M1` | **S5 定稿**：装配骨架 + 6 节填充 + **9 项合规校验** + 写盘 | 全程状态 | `design.md` | 任一校验不过 → 报错且**不写盘**；台账条数比对不一致 → 报错（防篡改） |
 | `debate.py` `M2` | **S3 交锋**：组织多轮讨论、登记分歧。含主持人（纯代码登记台账） | 台账 + 上轮 `Turn` | `DebateResult`（台账 + 逐轮发言） | 某人发言失败 → 记**显式弃权**（带原因），不伪造发言；连续弃权 2 轮移出并告警；引用了不存在的人设/分歧 → 告警并忽略该条，不让一条坏引用废掉整场；`closes` 与 `tradeoff_proposals` 撞同一项 → 告警并以 `closes` 为准 |
 | `consensus.py` `M2` | **S4 收敛**：纯函数判定（6 个分支）+ `finalize` 收口 + 零分歧检出 | `(Ledger, round, Budget, max_rounds, stagnation)` | `Decision` | 无 —— 纯函数无 IO，无失败模式（这是选它的理由之一）。**禁止 import `llm`**，有单测守住 |
-| `server.py` `M3` | 本地 HTTP 服务 + SSE 推送（**先补发历史、再进实时**，靠 `seq` 水位去重）+ 静态资源 + `POST /stop` + `POST /interject` | 事件总线 | HTTP 响应 | 端口占用 → 报错并提示换端口，**不静默换端口**；静态资源缺失 → 500 并写 stderr，**不返回空白页**；SSE 客户端断开 → 正常收尾路径，只捕获两个具体异常类型 |
-| `web/*` `M3` | 前端（HTML/CSS/JS，零构建、零外链，约 1140 行）。**阅读体验见 [web-ui.md](web-ui.md) §2.5 的四个诊断** | SSE 事件 | DOM | JS 异常 → 顶部显示错误条；连接中断 → **不清屏**，已发生的事实必须留在屏幕上 |
+| `pipeline.py` `M3.2` | **编排**：S0→S1→S2→S3→S4→S5 的顺序与收口（零分歧告警、写 `completed`、发 `session.end`）+ `mark_failed` | 已建好的 `Session` + `RuntimeConfig` | `design.md` 路径 | 任一阶段抛 `SparkyError` → **原样向上抛**，由调用方决定怎么写失败状态。这里不捕获、不降级、不续跑。**不得 import `server`** |
+| `workspace.py` `M3.2` | **提案工作台**：读（扫目录汇总清单/详情、重放 transcript）、写（发起提案、后台线程跑流水线）、控（停止 / 插话 / Ctrl-C 收口） | `--out` 目录 + 网页表单 | 提案清单与详情（纯 dict）+ `RunHandle` | `--out` 不存在 → 空清单（**这不是错误**）；单个 `meta.json` 损坏 → 那条标 `broken` 并写明原因，不影响其余；transcript 有解析不了的行 → `PersistenceError` 指出行号，**不跳过**；发起参数越界 → `UsageError` |
+| `server.py` `M3`+`M3.2` | 本地 HTTP 服务：提案 API + SSE 推送（**先补发历史、再进实时**，靠 `seq` 水位去重）+ 静态资源 | 一个 `ProposalApi`（**结构协议，不 import `workspace`**） | HTTP 响应 | 端口占用 → 报错并提示换端口，**不静默换端口**；静态资源缺失 → 500 并写 stderr，**不返回空白页**；`/events` 缺 `?session=` → 400，**不自动挑一个会话**；`session_id` 含路径分隔符 → 当作不存在；SSE 客户端断开 → 正常收尾路径，只捕获两个具体异常类型 |
+| `markdown.py` `M3.2` | 把 `design.md` 渲染成 HTML 片段（标题/列表/表格/围栏代码/引用/段落/水平线 + 粗体与行内代码） | Markdown 文本 | HTML 片段（已转义） | 纯函数无 IO；输入非 `str` → `TypeError`；围栏代码块未闭合 → 抛 `ValueError`（**不猜**：猜会把其后所有内容的渲染方式悄悄改掉）。不支持的构造**转义后原样输出**，绝不丢弃 |
+| `web/*` `M3`+`M3.2` | 前端（HTML/CSS/JS，零构建、零外链，约 1800 行）：提案列表 + 新建表单 + 详情（讨论 / 设计文档两个页签）。**阅读体验见 [web-ui.md](web-ui.md) §2.5 的四个诊断** | HTTP API + SSE 事件 | DOM | JS 异常 → 顶部显示错误条；连接中断 → **不清屏**（已发生的事实必须留在屏幕上），并**显式关掉连接** —— 否则 `EventSource` 会自动重连并重放，页面上的每段发言都会多出一份 |
 | `tools/build_single_file.py` | 把包 + 前端资源打包成单个 `sparky.py` | 源码树 | `dist/sparky.py` | 资源缺失 → 报错，不产出半成品 |
 
-### 实现中新增的三个模块
+### 实现中新增的六个模块
 
-设计定稿时没有给这三者安排归属，M1 实现时补上并回填本文档：
+设计定稿时没有给前三者安排归属，M1 实现时补上并回填本文档；
+后三者是 M3.2 加的：
 
 - **`errors.py`**：把"失败就说失败"落成可执行的退出码映射。
   没有它，`__main__` 就得靠 `except Exception` 猜错误类型 —— 那正是本项目禁止的写法。
@@ -42,31 +46,50 @@
   更重要的是它承载了**严格解析**这条纪律（缺字段就报错，不填默认值）。
 - **`render.py`**：终端渲染原本被含糊地归在"表现层"里，没有具体模块。
   它与 M3 的 SSE 服务是**并列的两个订阅者**，共用同一套事件协议。
+- **`pipeline.py`**：S0→S5 的顺序原本长在 `__main__.main()` 的函数体里。
+  M3.2 要支持"在网页上发起新提案"，流水线就必须能被**命令行之外**的调用方
+  复用 —— 否则工作台只能复制一份，两份迟早漂移，而漂移的后果是
+  "命令行跑得好好的，网页上跑出来的文档不一样"。
+- **`workspace.py`**：提案清单与运行管理。它属于**编排层**，
+  所以 `server.py` 只认一个 `ProposalApi` 结构协议，不 import 它
+  （§2 禁令 1 的延伸）。
+- **`markdown.py`**：设计文档的渲染。放服务端而不是前端，理由见
+  [web-ui.md](web-ui.md) §3.2。
 
 ## 2. 依赖方向（硬约束）
 
 ```
-       ┌────────────────────────────────────────────────┐
-       │ 表现层   render.py（终端）· server.py + web/*（M3）│
-       └───────────────┬────────────────────────────────┘
-                       │  只允许依赖 ↓（事件总线）
-       ┌───────────────▼────────────────────────────────┐
-       │ 编排层   __main__ · cli                        │
-       │          brief · personas · recon · debate      │
-       │          · consensus · synthesis               │
-       └───────────────┬────────────────────────────────┘
+       ┌──────────────────────────────────────────────────────────┐
+       │ 表现层   render.py（终端）                                │
+       │          server.py + web/* · markdown.py（网页，M3/M3.2）  │
+       └───────────────┬──────────────────────────────────────────┘
+                       │  ① 只允许依赖 ↓（事件总线）
+                       │  ② 网页通过 ProposalApi **结构协议**反向调用编排层
+       ┌───────────────▼──────────────────────────────────────────┐
+       │ 编排层   __main__ · cli · workspace.py（M3.2）             │
+       │          pipeline.py（M3.2）                              │
+       │          brief · personas · recon · debate                 │
+       │          · consensus · synthesis                          │
+       └───────────────┬──────────────────────────────────────────┘
                        │  只允许依赖 ↓
-       ┌───────────────▼────────────────────────────────┐
-       │ 基础层   config · llm · events · session        │
-       │          errors · models（全体共用底座）         │
-       └────────────────────────────────────────────────┘
+       ┌───────────────▼──────────────────────────────────────────┐
+       │ 基础层   config · llm · events · session                  │
+       │          errors · models（全体共用底座）                   │
+       └──────────────────────────────────────────────────────────┘
 ```
 
-三条禁令，实现时用 review 守住：
+四条禁令，实现时用 review 守住：
 
 1. **编排层不得 import `server`**。它只往总线上发事件，谁在听不关它的事。
+   M3.2 的工作台属于编排层，它需要按会话扇出事件与收插话 ——
+   所以 `EventHub` 与 `InterjectionQueue` 从 `server.py` **挪进了 `events.py`**
+   （它们本来就不含任何 HTTP 概念），而不是给这条禁令开一个例外。
 2. **表现层不得 import `llm`**。终端和网页都不能直接调模型。
 3. **`consensus.py` 不得 import `llm`**。一旦它调了模型，终止条件就不可复现了。
+4. **`server.py` 不得 import `workspace`**。网页要能发起提案，就必须能
+   "反向调用"编排层 —— 但那通过一个**结构协议** `ProposalApi` 完成，
+   `server` 只认形状不认实现（测试因此可以塞一个假工作台进来，
+   不必起流水线）。`workspace` 也**不得 import `server`**。
 
 ## 3. 数据流
 
@@ -105,6 +128,31 @@
 
 **关键顺序**：`session.py` 在流水线开跑**之前**就建好目录并写入 `meta.json`。
 这样即使进程在第 3 秒崩掉，磁盘上也留着"这次想干什么"。
+
+### 3.1 两条入口，一条流水线（M3.2）
+
+```
+python3 -m sparky "想法"          python3 -m sparky
+        │                                │
+        │                                ▼
+        │                       server.start(workspace)
+        │                                │
+        │                    网页 POST /api/proposals
+        │                                │
+        └──────────► workspace.start(runtime) ◄─────────┘
+                             │
+                    Session.create()  ──► .sparky/sessions/<id>/
+                             │
+                    pipeline.run()  ──► S0 … S5
+```
+
+两条入口走的是**同一条** `pipeline.run()`。这不是为了少写代码，
+而是因为两份实现迟早会漂移 —— 而漂移的后果是
+"命令行跑得好好的，网页上跑出来的文档不一样"。
+
+网页服务**先于**会话启动。这与 M1 的顺序相反，是个改进：
+从前是先建会话再起服务，端口冲突时会留下一个空会话目录再把它标成失败；
+现在端口冲突根本不会建会话，用户拿到一条干净的配置错误。
 
 ## 4. 磁盘布局
 
@@ -169,14 +217,24 @@
 | `convergence.decision` | `Decision` | 顶部状态条更新 |
 | `synthesis.start` | `—` | 显示"正在定稿" |
 | `doc.ready` | `path, stats` | 展示产物与下载链接 |
+| `client.interjection` | `text, received_round` | 「你的插话」索引新增一条，标注"待送达" |
+| `client.interjection.delivered` | `round, text` | 那条改成"已在第 N 轮送达" |
 | `warning` | `code, message` | 黄色告警条（如"本次零分歧"） |
-| `error` | `stage, message, detail` | 红色错误条 + 终止 |
+| `session.error` | `stage, message, detail` | 红色错误条 + 终止 |
 | `session.end` | `status, usage` | 收口，显示总成本 |
 
 **约定**：
 - `turn.token` 是**唯一**高频事件，必须允许前端批量按帧渲染，不要每 token 触发一次 layout。
 - 任何事件都不携带密钥。
-- `error` 事件之后必定跟 `session.end`。
+- `session.error` 事件之后必定跟 `session.end`。
+- **事件名不得与 `EventSource` 的 DOM 事件撞名**（`error` / `open` / `message`）。
+  业务错误事件曾经就叫 `error`，于是前端注册的 `addEventListener("error", …)`
+  会同时收到服务端发来的业务错误和浏览器自己发的连接错误，
+  后者让 `JSON.parse(undefined)` 抛异常，把真正的错误盖掉。
+  现在它叫 `session.error`，`tests/test_server.py` 有一条测试守着这条约束。
+- SSE 的 `?session=` 是**必填**的：网页按会话订阅，不自动挑一个。
+- 已结束的提案补完历史就**关闭连接**（响应头带 `Connection: close`），
+  否则页面会一直挂着一个永远不会来事件的"连接中"。
 
 ## 6. 一次完整会话的时序
 
@@ -222,6 +280,11 @@ User          cli/config     session      brief/personas/recon/debate/consensus/
 | S4 | 串行 | 纯计算，微秒级 |
 | S5 | 串行 | 单次调用（可能分章节多次调用） |
 
+**提案之间也可以并发**（M3.2）：在网页上连点两次"发起提案"会真的同时跑两场。
+**刻意没做队列** —— 排队会让用户点了"发起"却不知道要等多久。
+代价是 LLM 并发请求数翻倍、终端进度行会交错；要限制单场内部的并发度用
+`--concurrency`。见 [ADR 0005](adr/0005-proposal-workspace.md)「后果」。
+
 **两段式的必要性**：如果边生成边登记分歧，同一轮内先完成的人可能读到后完成者
 刚写进台账的条目，导致**同轮不同人看到的世界不一致**。这件事在并发下不可复现，
 是最难查的一类 bug。所以硬性规定：**轮内只读上轮快照，写台账必须等本轮全员结束**。
@@ -236,4 +299,4 @@ User          cli/config     session      brief/personas/recon/debate/consensus/
 | 每 Agent 独立供应商 | `config.py` 的 `persona_model_map` | 进一步降低同质化 |
 | 自定义人设模板 | `personas/presets/*.yaml` | 用户固定评审团 |
 | 自定义输出模板 | `synthesis.py` 的模板路径参数 | 如输出 RFC / PRD 格式 |
-| 事后二次提问 | 基于 transcript 的读取 + 单独 CLI 子命令 | "第 2 轮里成本官说了什么？" |
+| 事后二次提问 | `workspace.read_transcript()`（M3.2 已具备）+ 单独 CLI 子命令 | "第 2 轮里成本官说了什么？" —— 重放能力已经有了，缺的只是一个提问入口 |
